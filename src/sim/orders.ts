@@ -9,15 +9,29 @@
 //   operate                 -> a building's use cell; not written to the grid's order layer.
 
 import {
-  BUILDS, DECONSTRUCT_WORK, EMERGENCY, TILE_INFO, Tile, type BuildKind, type ResourceId,
+  BUILDS, DECONSTRUCT_WORK, EMERGENCY, SKILLS, TILE_INFO, Tile, type BuildKind, type ResourceId, type SkillId,
 } from './defs';
+
+export const SKILL_INDEX = Object.fromEntries(SKILLS.map((s, i) => [s, i])) as Record<SkillId, number>;
 import { canPlaceBuilding, footprint, useCell, type BuildingStore } from './buildings';
 import type { Grid } from './grid';
 import { canStand } from './nav';
 
 export type OrderKind = 'dig' | 'build' | 'deconstruct' | 'operate';
 /** What an operate order does at its building. */
-export type OperateTask = 'print' | 'cook' | 'sow' | 'harvest' | 'crank' | 'research' | 'clean';
+export type OperateTask = 'print' | 'cook' | 'sow' | 'harvest' | 'crank' | 'research' | 'clean' | 'refuel';
+
+const TASK_SKILL: Record<OperateTask, SkillId> = {
+  print: 'cooking', cook: 'cooking', sow: 'farming', harvest: 'farming', research: 'research',
+  crank: 'operating', clean: 'operating', refuel: 'operating',
+};
+
+/** The skill a job trains (and that likings / hates apply to). */
+export function orderSkill(o: Order): SkillId {
+  if (o.kind === 'dig') return 'digging';
+  if (o.kind === 'operate') return TASK_SKILL[o.task ?? 'print'];
+  return 'building';
+}
 export type Cost = Partial<Record<ResourceId, number>>;
 
 export interface Order {
@@ -83,6 +97,8 @@ export class OrderStore {
   readonly activeCount: Int32Array = new Int32Array(EMERGENCY + 1);
   /** Active and unclaimed orders per priority: lets job search skip exhausted buckets. */
   readonly availCount: Int32Array = new Int32Array(EMERGENCY + 1);
+  /** The same, per priority and skill (index p * SKILLS.length + skill): likings / hates filter by skill. */
+  readonly availSkill: Int32Array = new Int32Array((EMERGENCY + 1) * SKILLS.length);
   readonly jcw: number;
   readonly jch: number;
   private g: Grid;
@@ -105,7 +121,10 @@ export class OrderStore {
       const row = this.spatial[o.priority];
       (row[this.chunkOf(o)] ??= new Set()).add(o);
       this.activeCount[o.priority]++;
-      if (o.claimedBy < 0) this.availCount[o.priority]++;
+      if (o.claimedBy < 0) {
+        this.availCount[o.priority]++;
+        this.availSkill[o.priority * SKILLS.length + SKILL_INDEX[orderSkill(o)]]++;
+      }
     }
   }
   private unindex(o: Order): void {
@@ -113,7 +132,10 @@ export class OrderStore {
     if (o.active) {
       this.spatial[o.priority][this.chunkOf(o)]?.delete(o);
       this.activeCount[o.priority]--;
-      if (o.claimedBy < 0) this.availCount[o.priority]--;
+      if (o.claimedBy < 0) {
+        this.availCount[o.priority]--;
+        this.availSkill[o.priority * SKILLS.length + SKILL_INDEX[orderSkill(o)]]--;
+      }
     }
   }
 

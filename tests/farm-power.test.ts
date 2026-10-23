@@ -2,12 +2,18 @@
 // batteries, reactor, brownouts) and lamp light.
 import { describe, expect, it } from 'vitest';
 import { BUILDS, CROPS, DAY_SECONDS, LIGHT_WORK_BONUS, NEED_DEFS, RAW_HUNGER, TICK_HZ, Tile } from '../src/sim/defs';
-import { canPlaceBuilding } from '../src/sim/buildings';
+import { canPlaceBuilding, type Building } from '../src/sim/buildings';
 import type { World } from '../src/sim/world';
 import { cell, runUntil, worldFromAscii } from './helpers';
 
 const R = (x0: number, y0: number, x1 = x0, y1 = y0) => ({ x0, y0, x1, y1 });
 const SEC = TICK_HZ;
+
+/** Fill a generator's tank (rooms without colonists have nobody to refuel it). */
+function fueled(b: Building): Building {
+  b.tank = BUILDS[b.kind].fuel!.tank;
+  return b;
+}
 
 /**
  * Room 20 wide, 4 tall (rows 1..4, floor at y=5), optionally with a colonist at (2,4).
@@ -69,11 +75,11 @@ describe('planters and crops', () => {
     expect(mush.growth).toBeCloseTo(60 / CROPS.mushroom.growSeconds, 3);
     // a coal generator powers the lamp
     w.resources.coal = 100;
-    w.buildings.add('coalgen', 8, 3, false);
+    const gen0 = fueled(w.buildings.add('coalgen', 8, 3, false));
     w.run(60 * SEC);
     expect(berry.powered).toBe(true);
     expect(berry.growth).toBeGreaterThan(55 / CROPS.sunberry.growSeconds);
-    expect(w.resources.coal).toBeLessThan(100);
+    expect(gen0.tank).toBeLessThan(BUILDS.coalgen.fuel!.tank);
   });
 
   it('choosing another crop uproots the plant; switching a planter off stops its jobs', () => {
@@ -104,7 +110,7 @@ describe('food', () => {
     w.resources.coal = 500;
     w.buildings.add('stove', 4, 3, false);
     w.buildings.add('printer', 8, 3, false);
-    w.buildings.add('coalgen', 12, 3, false);
+    fueled(w.buildings.add('coalgen', 12, 3, false));
     runFed(w, 120 * SEC, () => w.resources.food >= 4);
     expect(w.resources.food).toBe(4); // target max(4, 2 x colonists)
     expect(w.resources.tuber).toBe(0); // 2 meals from 4 tubers
@@ -156,7 +162,7 @@ describe('power', () => {
   it('fuel generators charge batteries, stop when full, restart below 90%', () => {
     const w = room(false);
     w.resources.coal = 1000;
-    const gen = w.buildings.add('coalgen', 3, 3, false);
+    const gen = fueled(w.buildings.add('coalgen', 3, 3, false));
     const bat = w.buildings.add('battery', 6, 3, false);
     w.buildings.add('lamp', 8, 1, false);
     const cap = BUILDS.battery.capacity!;
@@ -165,9 +171,9 @@ describe('power', () => {
     const full = runUntil(w, () => !gen.powered, 60 * SEC);
     expect(full).toBeGreaterThan(0);
     expect(bat.charge).toBeGreaterThan(cap * 0.97);
-    const coal = w.resources.coal;
+    const fuel = gen.tank;
     w.run(30 * SEC);
-    expect(w.resources.coal).toBe(coal); // idle: no fuel burnt
+    expect(gen.tank).toBe(fuel); // idle: no fuel burnt
     runUntil(w, () => gen.powered, 400 * SEC);
     expect(gen.powered).toBe(true);
     // (the charge already includes the generator's first second)
@@ -178,18 +184,18 @@ describe('power', () => {
   it('the reactor burns radioactive matter for a lot of power', () => {
     const w = room(false);
     w.resources.radioactive = 10;
-    const r = w.buildings.add('reactor', 3, 2, false);
+    const r = fueled(w.buildings.add('reactor', 3, 2, false));
     w.buildings.add('battery', 7, 3, false);
     w.run(5 * SEC);
     expect(r.powered).toBe(true);
     expect(w.power.gen).toBe(3000);
-    expect(w.resources.radioactive).toBeCloseTo(10 - 0.01 * 5, 5);
+    expect(r.tank).toBeCloseTo(BUILDS.reactor.fuel!.tank - 0.01 * 5, 5);
   });
 
   it('brownout: consumers get power in building order until it runs out', () => {
     const w = room(false);
     w.resources.coal = 1000;
-    w.buildings.add('coalgen', 18, 3, false); // 800 W, no battery
+    fueled(w.buildings.add('coalgen', 18, 3, false)); // 800 W, no battery
     const planters = [];
     for (let i = 0; i < 14; i++) {
       const p = w.buildings.add('planter', 2 + i, 3, false);

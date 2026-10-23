@@ -77,8 +77,9 @@ const s = await page.evaluate(() => window.__colony.world.spawn);
 await page.keyboard.press('KeyB');
 const groups = await page.$$eval('.btab', (els) => els.map((e) => e.textContent));
 check(groups.includes('Food') && groups.includes('Power & light') && groups.includes('Science'), `build bar has Food, Power and Science tabs (${groups.join(', ')})`);
-const planterLocked = () => page.$eval('.build-btn[data-build="planter"]', (b) => b.classList.contains('locked'));
-check(await planterLocked(), 'the planter starts locked');
+const planterLocked = () => page.$eval('.build-btn[data-build="planter"]', (b) => b.classList.contains('hidden'));
+check(await planterLocked(), 'the planter is hidden until researched');
+check(await page.isHidden('.btab[data-cat="food"]') === false && await page.isHidden('.btab[data-cat="power"]') === false, 'tabs with unlocked buildings show (printer, manual generator)');
 await pick('research');
 await click(s.x - 1, s.y);
 await pick('crank');
@@ -194,6 +195,34 @@ const lit1 = (await state()).lit;
 check(lit1 < lit0, `switching a lamp off in the inspector darkens it (${lit0} -> ${lit1} lit cells)`);
 await page.waitForTimeout(150);
 await page.screenshot({ path: `${shots}/m3-05-lamp-off.png` });
+await page.keyboard.press('Escape');
+
+// M4: job priority in the inspector, the Priority tool, skills in the colonist panel
+await click(s.x + 2, s.y); // Cooking Station
+await page.waitForTimeout(120);
+await page.click('.bp-prio[data-p="8"]');
+await runFed(2);
+const stovePrio = await page.evaluate(() => [...window.__colony.world.buildings.ofKind('stove')][0].priority);
+check(stovePrio === 8, `inspector sets a building's job priority (${stovePrio})`);
+await page.keyboard.press('Escape');
+await page.keyboard.press('Digit9');
+await page.keyboard.press('KeyP');
+await drag(s.x - 8, s.y - 1, s.x - 6, s.y);
+await runFed(2);
+const planterPrios = await page.evaluate(() => [...window.__colony.world.buildings.ofKind('planter')].map((b) => b.priority));
+check(planterPrios.every((p) => p === 9), `Priority tool sets the planters to 9 (${planterPrios})`);
+await page.waitForTimeout(120);
+await page.screenshot({ path: `${shots}/m4-01-priority-tool.png` });
+await page.keyboard.press('Escape');
+await page.keyboard.press('Digit6');
+const someone = await page.evaluate(() => window.__colony.world.colonists[0].id);
+await page.evaluate((id) => { window.__colony.hud.selectedId = id; window.__colony.renderer.selectedId = id; }, someone);
+await page.waitForTimeout(150);
+const skills = await page.$$eval('.cp-skill', (els) => els.map((e) => e.className + ':' + e.textContent));
+check(skills.length === 6 && skills.some((s) => /like|love/.test(s)), `colonist panel lists 6 skills with likings (${skills.join(' | ')})`);
+const xp = await page.evaluate(() => window.__colony.world.colonists.map((c) => Object.values(c.xp).reduce((a, b) => a + b, 0)));
+check(xp.every((v) => v > 150), `colonists gained XP while working (${xp.map((v) => Math.round(v))})`);
+await page.screenshot({ path: `${shots}/m4-02-skills.png` });
 
 await page.keyboard.press('KeyB');
 await page.setViewportSize({ width: 400, height: 800 });

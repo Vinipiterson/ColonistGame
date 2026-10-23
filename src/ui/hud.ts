@@ -4,10 +4,12 @@
 
 import {
   BUILDS, BUILD_LIST, BUILD_RESEARCH, CROPS, CROP_LIST, CROP_RESEARCH, DAY_SECONDS, EMERGENCY, GROW_LAMP_BONUS,
-  GROW_LAMP_W, NEEDS, NEED_DEFS, NEED_LABEL, OUTHOUSE_USES, RESEARCH, RESOURCE_LABEL, RESOURCES, type BuildCategory,
-  type BuildKind, type CropId,
+  GROW_LAMP_W, MAX_SKILL_LEVEL, NEEDS, NEED_DEFS, NEED_LABEL, OUTHOUSE_USES, RESEARCH, RESOURCE_LABEL, RESOURCES,
+  SKILLS, SKILL_LABEL, levelXp, type BuildCategory, type BuildKind, type CropId,
 } from '../sim/defs';
 import type { Building } from '../sim/buildings';
+import type { Colonist } from '../sim/colonist';
+import { orderSkill } from '../sim/orders';
 import { buildIcon } from '../render/art';
 import type { World } from '../sim/world';
 import type { ToolMode, ToolState } from './input';
@@ -18,6 +20,7 @@ const TOOL_BUTTONS: { mode: ToolMode; label: string; key: string; hint: string }
   { mode: 'build', label: 'Build', key: 'B', hint: 'Pick something to build, then click or drag to place it.' },
   { mode: 'deconstruct', label: 'Deconstruct', key: 'X', hint: 'Drag over things you built to remove them (refunds half).' },
   { mode: 'cancel', label: 'Cancel', key: 'C', hint: 'Drag to cancel pending orders.' },
+  { mode: 'priority', label: 'Priority', key: 'P', hint: 'Drag to set the selected priority on orders and work buildings (nothing new is created).' },
 ];
 
 const RES_COLOR: Record<string, string> = {
@@ -151,6 +154,7 @@ export class Hud {
       if (t.dataset.act === 'crop') this.world.issue({ type: 'configure', buildingId: b.id, crop: t.dataset.crop as CropId });
       else if (t.dataset.act === 'toggle') this.world.issue({ type: 'configure', buildingId: b.id, on: !b.on });
       else if (t.dataset.act === 'lamp') this.world.issue({ type: 'configure', buildingId: b.id, lamp: !b.lamp });
+      else if (t.dataset.act === 'prio') this.world.issue({ type: 'configure', buildingId: b.id, priority: Number(t.dataset.p) });
     });
     root.append(this.bpanel);
 
@@ -334,17 +338,19 @@ export class Hud {
   }
 
   /** Grey out build buttons whose research isn't done (re-run when research completes). */
+  /** Locked buildings are hidden from the build bar, and so is a tab with nothing unlocked. */
   private syncLocks(): void {
     this.locksFor = this.world.research.done.size;
+    const open = new Set<BuildCategory>();
     for (const [k, b] of this.buildBtns) {
       const kind = k as BuildKind;
-      const locked = !this.world.isUnlocked(kind);
-      b.classList.toggle('locked', locked);
-      const d = BUILDS[kind];
-      b.title = locked
-        ? `Locked: research "${RESEARCH[BUILD_RESEARCH[kind]!].name}" (T). ${d.hint}`
-        : d.hint + (d.rotatable ? ' Press R to flip.' : '');
+      const unlocked = this.world.isUnlocked(kind);
+      b.classList.toggle('hidden', !unlocked);
+      if (unlocked) open.add(BUILDS[kind].category);
     }
+    for (const [c, tab] of this.tabBtns) tab.classList.toggle('hidden', !open.has(c));
+    if (!open.has(this.buildCat)) this.buildCat = 'structure';
+    this.syncTools();
   }
 
   private updateBuildingPanel(): void {
@@ -369,6 +375,13 @@ export class Hud {
     }
     if (SWITCHABLE.has(b.kind)) {
       s += `<button class="btn bp-toggle${b.on ? ' active' : ''}" data-act="toggle">${b.on ? 'On · click to switch off' : 'Off · click to switch on'}</button>`;
+    }
+    if (d.jobPriority !== undefined) {
+      // priority of the jobs colonists do here (also set with the Priority tool, P)
+      const btn = (p: number, label: string) =>
+        `<button class="btn bp-prio${b.priority === p ? ' active' : ''}${p === EMERGENCY ? ' em' : ''}" data-act="prio" data-p="${p}">${label}</button>`;
+      s += `<div class="bp-prio-title">Job priority</div><div class="bp-prios">` +
+        Array.from({ length: 9 }, (_, i) => btn(i + 1, String(i + 1))).join('') + btn(EMERGENCY, '!') + `</div>`;
     }
     if (this.bpStatic.innerHTML !== s) this.bpStatic.innerHTML = s;
     const dyn = this.buildingStatus(b);
@@ -414,9 +427,11 @@ export class Hud {
       case 'coalgen':
       case 'reactor': {
         const f = d.fuel!;
-        const fuelLeft = w.resources[f.res] < f.perSec ? 'No fuel' : 'Idle (power is fine)';
-        out += row('Status', !b.on ? 'Switched off' : b.powered ? `Running: ${d.powerGen} W` : fuelLeft);
-        out += row('Fuel', `${RESOURCE_LABEL[f.res]} ${Math.floor(w.resources[f.res])} (−${f.perSec}/s)`);
+        const idle = b.tank < f.perSec ? 'Out of fuel' : 'Idle (power is fine)';
+        out += row('Status', !b.on ? 'Switched off' : b.powered ? `Running: ${d.powerGen} W` : idle);
+        out += row('Tank', `${b.tank.toFixed(1)} / ${f.tank} ${RESOURCE_LABEL[f.res]} (−${f.perSec}/s)`) + bar(b.tank / f.tank);
+        if (job) out += row('Refuel', jobText);
+        else if (b.tank < f.tank / 2 && w.resources[f.res] < 1) out += row('Refuel', `No ${RESOURCE_LABEL[f.res].toLowerCase()} in stock`);
         break;
       }
       case 'battery':
@@ -444,6 +459,21 @@ export class Hud {
     return out;
   }
 
+  /** Skill levels with XP to the next level; ★ like, ♥ love, ✕ hate (never does that work). */
+  private skillsHtml(c: Colonist): string {
+    const mark = { like: '★', love: '♥', hate: '✕' };
+    return `<div class="cp-skills">` + SKILLS.map((s) => {
+      const a = c.aptitude[s];
+      const lvl = c.level(s);
+      const lo = levelXp(lvl), hi = levelXp(lvl + 1);
+      const f = lvl >= MAX_SKILL_LEVEL ? 1 : (c.xp[s] - lo) / (hi - lo);
+      const title = a === 'hate' ? 'Hates it: never does this work' : a === 'love' ? 'Loves it: +2 priority, 3× XP'
+        : a === 'like' ? 'Likes it: +1 priority, 2× XP' : '';
+      return `<div class="cp-skill ${a ?? ''}" title="${title}"><span>${a ? mark[a] + ' ' : ''}${SKILL_LABEL[s]}</span>` +
+        `<i><b style="width:${Math.round(f * 100)}%"></b></i><em>${a === 'hate' ? '—' : lvl}</em></div>`;
+    }).join('') + `</div>`;
+  }
+
   private updatePanel(): void {
     const c = this.world.colonists.find((k) => k.id === this.selectedId);
     if (!c) {
@@ -456,14 +486,15 @@ export class Hud {
       `<div class="cp-row"><span>Activity</span><b>${c.activity()}</b></div>` +
       `<div class="cp-row"><span>Health</span><b>${Math.round(c.health)} / 100</b></div>` +
       `<div class="cp-bar"><i style="width:${Math.max(0, c.health)}%"></i></div>` +
-      (c.job ? `<div class="cp-row"><span>Job priority</span><b>${c.job.priority === EMERGENCY ? 'Emergency' : c.job.priority}</b></div>` : '') +
+      (c.job ? `<div class="cp-row"><span>Job priority</span><b>${c.job.priority === EMERGENCY ? 'Emergency' : c.job.priority}</b></div>` +
+        `<div class="cp-row"><span>Skill</span><b>${SKILL_LABEL[orderSkill(c.job)]} ${c.level(orderSkill(c.job))}</b></div>` : '') +
       (c.alive
         ? `<div class="cp-needs">` + NEEDS.map((n) => {
           const v = Math.round(c.needs[n]);
           const d = NEED_DEFS[n];
           const cls = v < d.urgent ? 'bad' : v < d.want ? 'warn' : 'ok';
           return `<div class="cp-need ${cls}"><span>${NEED_LABEL[n]}</span><i><b style="width:${v}%"></b></i><em>${v}</em></div>`;
-        }).join('') + `</div>`
+        }).join('') + `</div>` + this.skillsHtml(c)
         : '');
     if (this.panel.innerHTML !== html) this.panel.innerHTML = html;
   }

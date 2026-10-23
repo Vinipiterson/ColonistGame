@@ -3,6 +3,7 @@
 //   'H' stairs (in empty cell)   '.' empty   '@' colonist feet (empty cell)
 import { Tile } from '../src/sim/defs';
 import { Grid } from '../src/sim/grid';
+import type { Colonist } from '../src/sim/colonist';
 import { World } from '../src/sim/world';
 
 export function worldFromAscii(rows: string[], seed = 1): World {
@@ -25,8 +26,15 @@ export function worldFromAscii(rows: string[], seed = 1): World {
     }
   }
   const world = new World(g, seed);
-  for (const [x, y] of spawns) world.spawnColonist(x, y);
+  for (const [x, y] of spawns) neutral(world.spawnColonist(x, y));
   return world;
+}
+
+/** No likings / hates and no XP, so scripted scenarios don't depend on rolled aptitudes. */
+export function neutral(c: Colonist): Colonist {
+  c.aptitude = {};
+  for (const s of Object.keys(c.xp) as (keyof typeof c.xp)[]) c.xp[s] = 0;
+  return c;
 }
 
 export function cell(world: World, x: number, y: number): number {

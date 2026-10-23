@@ -1,6 +1,6 @@
 // Research (stations, tiers, unlocks), outhouse cleaning and the planter grow lamp.
 import { describe, expect, it } from 'vitest';
-import { CROPS, GROW_LAMP_BONUS, OUTHOUSE_USES, RESEARCH, TICK_HZ } from '../src/sim/defs';
+import { ADV_RESEARCH_LEVEL, BUILDS, CROPS, GROW_LAMP_BONUS, OUTHOUSE_USES, RESEARCH, TICK_HZ, levelXp } from '../src/sim/defs';
 import type { World } from '../src/sim/world';
 import { runUntil, worldFromAscii } from './helpers';
 
@@ -31,7 +31,7 @@ function runFed(w: World, n: number, until?: () => boolean): number {
 /** Plenty of power: a coal generator with coal (placed directly, research skipped). */
 function powered(w: World, x = 16): void {
   w.resources.coal = 1000;
-  w.buildings.add('coalgen', x, 3, false);
+  w.buildings.add('coalgen', x, 3, false).tank = BUILDS.coalgen.fuel!.tank;
 }
 
 const buildOrders = (w: World) => [...w.orders.all()].filter((o) => o.kind === 'build').map((o) => o.build);
@@ -98,6 +98,10 @@ describe('research', () => {
     expect(w.research.active).toBe('tubers');
     expect(w.research.progress.tubers ?? 0).toBe(0);
     w.buildings.add('advresearch', 10, 3, false);
+    // the Advanced station needs a trained researcher
+    runFed(w, 30 * SEC);
+    expect(w.research.progress.tubers ?? 0).toBe(0);
+    w.colonists[0].xp.research = levelXp(ADV_RESEARCH_LEVEL);
     runFed(w, 90 * SEC);
     expect(w.research.progress.tubers).toBeGreaterThan(20);
     // switching projects keeps the points

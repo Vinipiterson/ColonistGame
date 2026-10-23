@@ -11,7 +11,9 @@ export type Command =
   | { type: 'deconstruct'; rect: Rect; priority: number }
   | { type: 'cancel'; rect: Rect }
   /** Building inspector: switch it on/off, choose a planter's crop (uproots the current plant), grow lamp. */
-  | { type: 'configure'; buildingId: number; on?: boolean; crop?: CropId; lamp?: boolean }
+  | { type: 'configure'; buildingId: number; on?: boolean; crop?: CropId; lamp?: boolean; priority?: number }
+  /** Priority tool: set the priority of every order and prioritised building in the rectangle. */
+  | { type: 'prioritize'; rect: Rect; priority: number }
   /** Research panel: the project research stations work on (null = none). */
   | { type: 'research'; id: ResearchId | null };
 

@@ -1,10 +1,10 @@
 // Mouse + keyboard. Turns gestures into sim Commands and camera moves.
-//   Left drag (tool mode)  -> rectangle command (Dig / Build / Deconstruct / Cancel)
+//   Left drag (tool mode)  -> rectangle command (Dig / Build / Deconstruct / Cancel / Priority)
 //                             buildings: click places one, drag tiles copies side by side
 //   Left click (no tool)   -> select colonist (else building); left drag (no tool) -> pan
 //   Right click            -> leave the current tool (or cancel an in-progress drag)
 //   Right / middle drag    -> pan          Wheel or +/- -> zoom
-//   WASD / arrows pan, G/B/X/C tools, R flip/rotate, T research, Esc, 1-9 priority, 0 emergency, Space pause
+//   WASD / arrows pan, G/B/X/C/P tools, R flip/rotate, T research, Esc, 1-9 priority, 0 emergency, Space pause
 
 import { buildingPlacements, canPlaceBuilding } from '../sim/buildings';
 import { normRect } from '../sim/commands';
@@ -14,7 +14,7 @@ import { canPlaceBuild, canPlaceDeconstruct, canPlaceDig } from '../sim/orders';
 import type { World } from '../sim/world';
 import type { Renderer } from '../render/renderer';
 
-export type ToolMode = 'select' | 'dig' | 'build' | 'deconstruct' | 'cancel';
+export type ToolMode = 'select' | 'dig' | 'build' | 'deconstruct' | 'cancel' | 'priority';
 
 export const MODE_COLOR: Record<ToolMode, string> = {
   select: 'rgba(255,255,255,ALPHA)',
@@ -22,6 +22,7 @@ export const MODE_COLOR: Record<ToolMode, string> = {
   build: 'rgba(90,175,255,ALPHA)',
   deconstruct: 'rgba(255,80,80,ALPHA)',
   cancel: 'rgba(220,220,220,ALPHA)',
+  priority: 'rgba(199,125,255,ALPHA)',
 };
 
 const PRIORITY_KEY = 'colony.priority';
@@ -142,6 +143,7 @@ export class Input {
           break;
         case 'deconstruct': this.world.issue({ type: 'deconstruct', rect, priority: p }); break;
         case 'cancel': this.world.issue({ type: 'cancel', rect }); break;
+        case 'priority': this.world.issue({ type: 'prioritize', rect, priority: p }); break;
       }
       this.dragStart = this.dragEnd = null;
       this.updatePreview();
@@ -190,6 +192,7 @@ export class Input {
     else if (e.code === 'KeyB') t.set({ mode: 'build' });
     else if (e.code === 'KeyX') t.set({ mode: 'deconstruct' });
     else if (e.code === 'KeyC') t.set({ mode: 'cancel' });
+    else if (e.code === 'KeyP') t.set({ mode: 'priority' });
     else if (e.code === 'KeyR') t.set({ flip: !t.flip });
     else if (e.code === 'KeyT') t.set({ research: !t.research });
     else if (e.code === 'Equal' || e.code === 'NumpadAdd') this.zoomAt(1.25);
@@ -225,6 +228,7 @@ export class Input {
     const def = BUILDS[kind];
     const g = this.world.grid;
     const dragging = !!(this.dragStart && this.dragEnd);
+    this.r.showBuildingPriority = mode === 'priority';
     if (mode === 'select' || (!dragging && !(mode === 'build' && this.hover))) {
       this.r.preview = null;
       return;
@@ -256,10 +260,17 @@ export class Input {
         case 'build': return this.validTileBuild(cell, kind);
         case 'deconstruct': return canPlaceDeconstruct(g, cell) || g.bld[cell] >= 0;
         case 'cancel': return g.order[cell] >= 0;
+        case 'priority': return g.order[cell] >= 0 || this.prioritised(cell);
         default: return false;
       }
     };
     this.r.preview = { rect, color: MODE_COLOR[mode], valid, tileKind: mode === 'build' ? kind : undefined, flip: this.tools.flip };
+  }
+
+  /** A building colonists work at (it has a job priority) covers this cell. */
+  private prioritised(cell: number): boolean {
+    const b = this.world.buildings.at(cell);
+    return !!b && BUILDS[b.kind].jobPriority !== undefined;
   }
 
   private validTileBuild(cell: number, kind: BuildKind): boolean {

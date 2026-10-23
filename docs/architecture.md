@@ -20,6 +20,10 @@ TypeScript (strict) + Canvas 2D, Vite (single-file build), Vitest (headless sim 
 - No plumbing/water for now: toilets, sinks, showers just cost matter.
 - Colonists: 1 wide × 2 tall; position = feet cell. Work reach: ±1 tile horizontally, from 3 above the feet to 1 below.
 - Priorities: 1–9 (9 highest) + Emergency (preempts). Bottom-right widget or keys 1–9 (0 = Emergency). Selection persists (also across reloads); default 6. Re-dragging a tool over existing orders re-prioritises them.
+- Building priorities (M4): every building colonists work at (printer, stove, planter, manual / coal generator, reactor, research stations) has its own job priority, set in the inspector or with the Priority tool (P: drag a rectangle, only priorities change, for orders and work buildings). Defaults: food/farm/fuel 6, crank 7, research 5; meal jobs +2 while meals run short. Beds, toilets, showers, tables etc. have none. Outhouse cleaning stays at 7.
+- Build menu (M4): locked buildings are hidden until researched; a category tab with nothing unlocked is hidden.
+- Fuel (M4): coal generators and reactors burn from a tank (30 coal / 10 radioactive) that colonists refill from the stockpile (Operating job, at the generator's priority) when it is below half.
+- Skills (M4): colonists level skills by working; nobody assigns skills by hand. Each is born with 1–2 likings; ~1 in 4 has a love instead, which always comes with a hate (that work is never done). Like: +1 job priority, 2× XP, starts at level 1. Love: +2, 3× XP, level 2. Emergencies still come first. The Advanced Research Station needs Research level 3.
 - Power (M3): one colony-wide pool, no wires (matches the global stockpile). Buildings keep enough state that per-network wiring can be added later.
 - Food (M3): harvests give raw crops (own resources); a powered Cooking Station turns them into meals and is used before the Ration Printer. With no meals, colonists eat a raw portion (the amount that makes a meal): +60 hunger, 1.5× slower.
 - Ration Printer needs power (200 W while printing), so the first power source is usually a Manual Generator; the colony starts with 6 meals.
@@ -51,6 +55,20 @@ TypeScript (strict) + Canvas 2D, Vite (single-file build), Vitest (headless sim 
 - Automatic jobs are operate orders with a task (print / cook / sow / harvest / crank) and their own cost, one per building (`opOrders`). Meals: stoves then printers top the stock up to max(4, 2×colonists).
 - Light map (src/sim/light.ts): rebuilt only when a lamp's powered state changes or the grid changes near a lit lamp.
 - Inspector: clicking a building shows status + controls (crop, grow lamp, on/off) and issues `configure` commands.
+
+## Skills (M4)
+| Skill | Jobs |
+|---|---|
+| Digging | dig orders, digging out tiles under builds |
+| Building | build, deconstruct |
+| Farming | sow, harvest |
+| Cooking | print rations, cook |
+| Research | research |
+| Operating | crank, refuel, clean the outhouse |
+
+- XP: 1 per second of work (× aptitude rate). Level n needs 100·n² XP, max 10; +6% work speed per level. Level-ups are logged.
+- Job search (`World.findJob`): Emergency bucket first (any non-hated skill); then by effective priority e = p + bonus from 11 down, and at equal e the higher real priority first. `OrderStore.availSkill` counts available orders per priority and skill so a filtered bucket scan stops as soon as it has seen every matching order (bench: ~0.1 ms/tick for the new search, ~0.85 ms total with rolled aptitudes).
+- Aptitudes use their own RNG stream (seed-derived), so they don't shift the rest of the simulation. Tests use neutral colonists (tests/helpers.ts) unless they test skills.
 
 ## Research (M3b)
 | Tier | Project | Cost | Needs | Unlocks |
@@ -101,5 +119,6 @@ Thresholds per need: want (handle after the current job), urgent (drop the job, 
 2. DONE. Multi-tile buildings + placement validation, rotatable stair blocks (R), automatic doors, needs + need buildings, Ration Printer, deaths, anti-trap rules, lose screen. 45 unit/scenario tests + 2 browser runs; benchmark ~1.5 ms/tick avg.
 3. DONE. Planters with three crops, raw crops + Cooking Station, raw eating; power pool with manual/coal generators, reactor, batteries, brownouts; powered printer; ceiling lamps with occluded light and a work bonus; building inspector; build bar tabs. 56 unit/scenario tests + 3 browser runs; benchmark ~0.65 ms/tick avg.
 3b. DONE. Research: Research / Advanced Research Stations, two-tier tree gating most buildings and crops, research panel; Outhouse that needs cleaning + Flush Toilet; planter grow lamp upgrade. 64 unit/scenario tests + 3 browser runs; benchmark ~0.65 ms/tick avg.
-4. NEXT. Skills/XP/likings (incl. a research level for the Advanced Research Station), rooms + bonuses.
+4. DONE. Skills with XP/levels and likes/loves/hates (job pull, faster XP, never doing hated work); Research level gate on the Advanced station; per-building job priorities + Priority tool; generator fuel tanks + refuel jobs; locked buildings hidden from the build menu. 76 unit/scenario tests + 3 browser runs; benchmark ~0.85 ms/tick avg.
+4b. NEXT. Rooms + room bonuses (Barracks, Mess Hall, Farm).
 5. Arrivals + beacon, save/load, performance pass to 500 colonists.

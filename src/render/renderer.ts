@@ -73,6 +73,8 @@ export class Renderer {
   private lastTime = 0;
   selectedId = -1;
   selectedBuilding = -1;
+  /** Priority tool active: show the priority of every work building. */
+  showBuildingPriority = false;
   hoverCell = -1;
   preview: Preview | null = null;
   private dpr = 1;
@@ -298,6 +300,7 @@ export class Renderer {
     this.drawAnimated(dt, tx0, ty0, tx1, ty1, timeSec);
     this.drawOrders(tx0, ty0, tx1, ty1, timeSec);
     this.drawSelectedBuilding();
+    if (this.showBuildingPriority) this.drawBuildingPriorities(tx0, ty0, tx1, ty1);
     this.drawPreview();
     for (const c of this.world.colonists) if (c.state === 'dead') this.drawColonist(c, alpha, timeSec);
     for (const c of this.world.colonists) if (c.state !== 'dead') this.drawColonist(c, alpha, timeSec);
@@ -399,6 +402,14 @@ export class Renderer {
     ctx.closePath();
     ctx.fill();
     ctx.globalAlpha = 1;
+  }
+
+  private drawBuildingPriorities(tx0: number, ty0: number, tx1: number, ty1: number): void {
+    for (const b of this.world.buildings.all()) {
+      if (BUILDS[b.kind].jobPriority === undefined) continue;
+      if (b.x + b.w < tx0 || b.x > tx1 || b.y + b.h < ty0 || b.y > ty1) continue;
+      this.drawPrioBadge(b.x, b.y, b.w, b.priority);
+    }
   }
 
   private drawSelectedBuilding(): void {
@@ -513,9 +524,14 @@ export class Renderer {
   }
 
   private drawBadge(o: Order): void {
-    const ctx = this.ctx;
     const { x, y, w } = this.orderBox(o);
-    const em = o.priority === EMERGENCY;
+    this.drawPrioBadge(x, y, w, o.priority);
+  }
+
+  /** Priority number in a dot at the top-right corner of a box (red "!" for Emergency). */
+  private drawPrioBadge(x: number, y: number, w: number, priority: number): void {
+    const ctx = this.ctx;
+    const em = priority === EMERGENCY;
     ctx.fillStyle = em ? '#ff3b3b' : 'rgba(10,10,14,0.75)';
     ctx.beginPath();
     ctx.arc(x + w - 0.2, y + 0.2, 0.17, 0, Math.PI * 2);
@@ -524,7 +540,7 @@ export class Renderer {
     ctx.font = 'bold 0.26px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(em ? '!' : String(o.priority), x + w - 0.2, y + 0.21);
+    ctx.fillText(em ? '!' : String(priority), x + w - 0.2, y + 0.21);
   }
 
   private drawPreview(): void {

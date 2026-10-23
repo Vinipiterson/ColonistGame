@@ -3,7 +3,7 @@
 // walk through them, as in ONI. Each building has `slots` use cells along its bottom row
 // (where a colonist stands to use it) and per-slot reservations.
 
-import { BUILDS, DEFAULT_CROP, type BuildKind, type CropId } from './defs';
+import { BUILDS, DEFAULT_CROP, DEFAULT_PRIORITY, type BuildKind, type CropId } from './defs';
 import type { Grid } from './grid';
 import { canStand } from './nav';
 
@@ -21,6 +21,10 @@ export interface Building {
   removed: boolean;
   /** Player switch (inspector). Off: no power draw, no generation, no automatic jobs. */
   on: boolean;
+  /** Priority of the jobs colonists do here (buildings with a jobPriority; inspector / priority tool). */
+  priority: number;
+  /** Fuel generators: fuel in the tank (refilled by colonists). */
+  tank: number;
   /** Consumers: got power in the last power update. Generators: ran in the last update. */
   powered: boolean;
   /** Battery charge in joules. */
@@ -77,7 +81,7 @@ export class BuildingStore {
     const b: Building = {
       id: this.nextId++, kind, x, y, w: d.w, h: d.h, flip,
       users: new Array(Math.max(1, d.slots)).fill(-1), removed: false,
-      on: true, powered: false, charge: 0, crop: DEFAULT_CROP, planted: false, growth: 0, lamp: false, uses: 0, dirty: false, busyTick: -1000, crankTicks: 0,
+      on: true, priority: d.jobPriority ?? DEFAULT_PRIORITY, tank: 0, powered: false, charge: 0, crop: DEFAULT_CROP, planted: false, growth: 0, lamp: false, uses: 0, dirty: false, busyTick: -1000, crankTicks: 0,
     };
     this.byId.set(b.id, b);
     this.ofKind(kind).add(b);

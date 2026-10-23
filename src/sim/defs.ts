@@ -104,7 +104,9 @@ export interface BuildDef {
   /** Watts produced while running. */
   powerGen?: number;
   /** Generator fuel burnt per second while running. */
-  fuel?: { res: ResourceId; perSec: number };
+  fuel?: { res: ResourceId; perSec: number; tank: number };
+  /** Default priority of the jobs colonists do at this building (player-adjustable per building). */
+  jobPriority?: number;
   /** Battery capacity in joules. */
   capacity?: number;
 }
@@ -162,29 +164,29 @@ export const BUILDS: Record<BuildKind, BuildDef> = {
   },
   printer: {
     kind: 'printer', name: 'Ration Printer', category: 'food', shape: 'building', w: 2, h: 2,
-    cost: { matter: 150 }, work: 8, solid: false, rotatable: true, slots: 1, powerUse: 200,
+    cost: { matter: 150 }, work: 8, solid: false, rotatable: true, slots: 1, powerUse: 200, jobPriority: 6,
     hint: 'A colonist turns 100 matter into 1 meal (200 W while printing). Keeps a stock for everyone.',
   },
   planter: {
     kind: 'planter', name: 'Planter', category: 'food', shape: 'building', w: 1, h: 2,
-    cost: { matter: 60 }, work: 4, solid: false, rotatable: false, slots: 1,
+    cost: { matter: 60 }, work: 4, solid: false, rotatable: false, slots: 1, jobPriority: 6,
     hint: 'Grows one crop (click it to choose). Colonists sow and harvest it automatically.',
   },
   stove: {
     kind: 'stove', name: 'Cooking Station', category: 'food', shape: 'building', w: 2, h: 2,
-    cost: { matter: 200 }, work: 6, solid: false, rotatable: true, slots: 1, powerUse: 150,
+    cost: { matter: 200 }, work: 6, solid: false, rotatable: true, slots: 1, powerUse: 150, jobPriority: 6,
     hint: 'A colonist cooks crops into meals (150 W while cooking). Used before the printer.',
   },
   crank: {
     kind: 'crank', name: 'Manual Generator', category: 'power', shape: 'building', w: 2, h: 2,
-    cost: { matter: 150 }, work: 5, solid: false, rotatable: true, slots: 1, powerGen: 400,
+    cost: { matter: 150 }, work: 5, solid: false, rotatable: true, slots: 1, powerGen: 400, jobPriority: 7,
     hint: 'A colonist cranks it for 400 W when power runs short. Tiring: hunger and sleep drain twice as fast.',
   },
   coalgen: {
     kind: 'coalgen', name: 'Coal Generator', category: 'power', shape: 'building', w: 2, h: 2,
     cost: { matter: 300 }, work: 8, solid: false, rotatable: true, slots: 0, powerGen: 800,
-    fuel: { res: 'coal', perSec: 0.1 },
-    hint: '800 W, burns 0.1 coal/s from the stockpile. Runs only while power is needed or batteries are low.',
+    fuel: { res: 'coal', perSec: 0.1, tank: 30 }, jobPriority: 6,
+    hint: '800 W, burns 0.1 coal/s from a 30-coal tank that colonists refill. Runs only while power is needed or batteries are low.',
   },
   battery: {
     kind: 'battery', name: 'Battery', category: 'power', shape: 'building', w: 1, h: 2,
@@ -194,8 +196,8 @@ export const BUILDS: Record<BuildKind, BuildDef> = {
   reactor: {
     kind: 'reactor', name: 'Reactor', category: 'power', shape: 'building', w: 3, h: 3,
     cost: { matter: 600, radioactive: 25 }, work: 15, solid: false, rotatable: false, slots: 0, powerGen: 3000,
-    fuel: { res: 'radioactive', perSec: 0.01 },
-    hint: '3000 W, burns 0.01 radioactive/s. Runs only while power is needed or batteries are low.',
+    fuel: { res: 'radioactive', perSec: 0.01, tank: 10 }, jobPriority: 6,
+    hint: '3000 W, burns 0.01 radioactive/s from a 10-unit tank that colonists refill. Runs only while power is needed or batteries are low.',
   },
   lamp: {
     kind: 'lamp', name: 'Ceiling Lamp', category: 'power', shape: 'building', w: 1, h: 1,
@@ -204,12 +206,12 @@ export const BUILDS: Record<BuildKind, BuildDef> = {
   },
   research: {
     kind: 'research', name: 'Research Station', category: 'science', shape: 'building', w: 2, h: 2,
-    cost: { matter: 200 }, work: 8, solid: false, rotatable: true, slots: 1, powerUse: 100,
+    cost: { matter: 200 }, work: 8, solid: false, rotatable: true, slots: 1, powerUse: 100, jobPriority: 5,
     hint: 'A colonist researches the selected tier 1 project here (100 W while researching).',
   },
   advresearch: {
     kind: 'advresearch', name: 'Advanced Research Station', category: 'science', shape: 'building', w: 2, h: 2,
-    cost: { matter: 400, coal: 50 }, work: 12, solid: false, rotatable: true, slots: 1, powerUse: 200,
+    cost: { matter: 400, coal: 50 }, work: 12, solid: false, rotatable: true, slots: 1, powerUse: 200, jobPriority: 5,
     hint: 'Researches any project, including tier 2 (200 W while researching).',
   },
 };
@@ -269,7 +271,6 @@ export const RESEARCH_LIST = Object.keys(RESEARCH) as ResearchId[];
 /** Highest research tier each station can work on. */
 export const STATION_TIER: Partial<Record<BuildKind, number>> = { research: 1, advresearch: 2 };
 export const RESEARCH_WORK = 30;
-export const RESEARCH_PRIORITY = 5;
 
 /** The research that unlocks a building / crop (absent = available from the start). */
 export const BUILD_RESEARCH: Partial<Record<BuildKind, ResearchId>> = {};
@@ -318,7 +319,6 @@ export const GROW_LAMP_W = 60;
 export const GROW_LAMP_BONUS = 1.5;
 export const HARVEST_WORK = 3;
 export const COOK_WORK = 8;
-export const FARM_PRIORITY = 6;
 /** No meals left: a raw portion (perMeal crop units) restores this much hunger and takes longer. */
 export const RAW_HUNGER = 60;
 export const RAW_EAT_FACTOR = 1.5;
@@ -335,7 +335,6 @@ export const GEN_STOP = 0.99;
 /** Seconds of cranking per job, and how much faster hunger and sleep drain meanwhile. */
 export const CRANK_WORK = 30;
 export const CRANK_DRAIN = 2;
-export const CRANK_PRIORITY = 7;
 /** Crank when batteries are below this fraction and something draws power. */
 export const CRANK_BELOW = 0.5;
 /** A powered workstation job is only taken with this many seconds of its draw stored (or spare). */
@@ -401,9 +400,48 @@ export const SLEEP_HEAL = 100 / DAY_SECONDS;
 /** Priorities 1..9 (9 highest), 10 = Emergency. */
 export const EMERGENCY = 10;
 export const DEFAULT_PRIORITY = 6;
-/** Priority of the automatic Ration Printer jobs (raised when meals run short). */
-export const PRINTER_PRIORITY = 6;
-export const PRINTER_PRIORITY_SHORT = 8;
+/** Meal jobs (printer / stove) are raised this much above the building's priority while meals run short. */
+export const FOOD_SHORT_BONUS = 2;
+/** Refuel a generator when its tank is below this fraction; seconds of work. */
+export const REFUEL_BELOW = 0.5;
+export const REFUEL_WORK = 4;
+
+// ---------------------------------------------------------------- skills
+
+export type SkillId = 'digging' | 'building' | 'farming' | 'cooking' | 'research' | 'operating';
+export const SKILLS: SkillId[] = ['digging', 'building', 'farming', 'cooking', 'research', 'operating'];
+export const SKILL_LABEL: Record<SkillId, string> = {
+  digging: 'Digging', building: 'Building', farming: 'Farming', cooking: 'Cooking', research: 'Research', operating: 'Operating',
+};
+/** How a colonist feels about a skill (born with it). */
+export type Aptitude = 'like' | 'love' | 'hate';
+export interface AptitudeDef {
+  /** Liked jobs count this many priority levels higher for the colonist. */
+  priorityBonus: number;
+  xpRate: number;
+  startLevel: number;
+}
+export const APTITUDE: Record<'like' | 'love', AptitudeDef> = {
+  like: { priorityBonus: 1, xpRate: 2, startLevel: 1 },
+  love: { priorityBonus: 2, xpRate: 3, startLevel: 2 },
+};
+export const MAX_PRIORITY_BONUS = 2;
+/** Chance a colonist has 2 likings instead of 1; chance one liking is a love (which brings a hate). */
+export const TWO_LIKES_CHANCE = 0.5;
+export const LOVE_CHANCE = 0.25;
+export const MAX_SKILL_LEVEL = 10;
+/** Work speed bonus per skill level. */
+export const SKILL_SPEED_PER_LEVEL = 0.06;
+/** Research level needed to work at the Advanced Research Station. */
+export const ADV_RESEARCH_LEVEL = 3;
+
+/** XP needed to reach a level: 100 * level^2 (1 XP per second of work, more for likings). */
+export function levelXp(level: number): number {
+  return 100 * level * level;
+}
+export function skillLevel(xp: number): number {
+  return Math.min(MAX_SKILL_LEVEL, Math.floor(Math.sqrt(xp / 100)));
+}
 
 export const START_RESOURCES: Record<ResourceId, number> = {
   matter: 300, coal: 0, radioactive: 0, mushroom: 0, tuber: 0, sunberry: 0, food: 6,

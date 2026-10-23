@@ -2,7 +2,9 @@
 // Plain objects on purpose: at hundreds of colonists the cost is in pathing / job search,
 // not in property access, and objects keep the AI readable.
 
-import { MAX_HEALTH, type CropId, type NeedId } from './defs';
+import {
+  APTITUDE, MAX_HEALTH, SKILLS, skillLevel, type Aptitude, type CropId, type NeedId, type SkillId,
+} from './defs';
 import type { OperateTask, Order } from './orders';
 import type { Path, PathRequest } from './pathfinder';
 
@@ -49,6 +51,10 @@ export class Colonist {
   state: ColonistState = 'idle';
   health = MAX_HEALTH;
   deathCause: string | null = null;
+
+  /** Skill XP (level = skillLevel(xp)), and how the colonist feels about each skill (born with it). */
+  xp = Object.fromEntries(SKILLS.map((s) => [s, 0])) as Record<SkillId, number>;
+  aptitude: Partial<Record<SkillId, Aptitude>> = {};
 
   /** 100 = fully satisfied, 0 = desperate. */
   needs: Record<NeedId, number> = { hunger: 100, sleep: 100, bladder: 100, hygiene: 100 };
@@ -105,6 +111,22 @@ export class Colonist {
     return this.state !== 'dead';
   }
 
+  level(s: SkillId): number {
+    return skillLevel(this.xp[s]);
+  }
+  /** Priority levels a liked / loved job gains for this colonist. */
+  priorityBonus(s: SkillId): number {
+    const a = this.aptitude[s];
+    return a === 'like' || a === 'love' ? APTITUDE[a].priorityBonus : 0;
+  }
+  xpRate(s: SkillId): number {
+    const a = this.aptitude[s];
+    return a === 'like' || a === 'love' ? APTITUDE[a].xpRate : 1;
+  }
+  hates(s: SkillId): boolean {
+    return this.aptitude[s] === 'hate';
+  }
+
   placeAt(cell: number, w: number): void {
     this.cell = cell;
     this.x = cell % w;
@@ -155,6 +177,7 @@ const OPERATE_LABEL: Record<OperateTask, string> = {
   crank: 'Cranking the generator',
   research: 'Researching',
   clean: 'Cleaning the outhouse',
+  refuel: 'Refuelling a generator',
 };
 
 export const NEED_TASK_LABEL: Record<NeedTaskKind, string> = {

@@ -11,15 +11,17 @@
 //   7. emergency preemption (every 10 ticks)
 
 import {
-  BATTERY_LEAK, BUILDS, BLADDER_HOLD_LIMIT, BED_SLEEP_RATE, COOK_WORK, CRANK_BELOW, CRANK_DRAIN, CRANK_PRIORITY,
+  BATTERY_LEAK, BUILDS, BLADDER_HOLD_LIMIT, BED_SLEEP_RATE, COOK_WORK, CRANK_BELOW, CRANK_DRAIN,
   CRANK_WORK, CROPS, CROP_LIST, DECONSTRUCT_REFUND, DIRTY_THRESHOLD, DIRTY_WORK_SPEED, DT, EAT_TIME_STANDING,
-  EAT_TIME_TABLE, EMERGENCY, EXHAUST_DAMAGE, FARM_PRIORITY, FLOOR_SLEEP_FACTOR, GEN_START, GEN_STOP, GRAVITY,
+  EAT_TIME_TABLE, EMERGENCY, EXHAUST_DAMAGE, FLOOR_SLEEP_FACTOR, GEN_START, GEN_STOP, GRAVITY,
   HARVEST_WORK, LAMP_RADIUS, LIGHT_WORK_BONUS, NEEDS, NEED_DEFS, POWER_RESERVE_SECONDS, POWER_TICKS, POWER_WAIT,
-  PRINTER_MATTER, PRINTER_PRIORITY, PRINTER_PRIORITY_SHORT, PRINTER_WORK, RAW_EAT_FACTOR, RAW_HUNGER, RESOURCES,
+  PRINTER_MATTER, PRINTER_WORK, RAW_EAT_FACTOR, RAW_HUNGER, RESOURCES,
   SHOWER_TIME, SINK_HYGIENE, SINK_TIME, SKIP_SINK_HYGIENE, SLEEP_HEAL, SOW_WORK, STARVE_DAMAGE, START_RESOURCES,
   TICK_HZ, TILE_INFO, TOILET_TIME, Tile, WALK_SPEED, fallDamage, type BuildKind, type CropId, type NeedId,
   type ResourceId, BUILD_RESEARCH, CLEAN_PRIORITY, CLEAN_WORK, CROP_RESEARCH, GROW_LAMP_BONUS, GROW_LAMP_W,
-  OUTHOUSE_USES, RESEARCH, RESEARCH_LIST, RESEARCH_PRIORITY, RESEARCH_WORK, STATION_TIER, type ResearchId,
+  OUTHOUSE_USES, RESEARCH, RESEARCH_LIST, RESEARCH_WORK, STATION_TIER, type ResearchId, ADV_RESEARCH_LEVEL,
+  APTITUDE, FOOD_SHORT_BONUS, LOVE_CHANCE, MAX_PRIORITY_BONUS, REFUEL_BELOW, REFUEL_WORK, SKILLS, SKILL_LABEL,
+  SKILL_SPEED_PER_LEVEL, TWO_LIKES_CHANCE, levelXp, type SkillId,
 } from './defs';
 import {
   BuildingStore, buildingPlacements, canPlaceBuilding, freeSlot, slotUsable, useCell, type Building,
@@ -31,7 +33,8 @@ import { LightMap } from './light';
 import { MAX_NEIGHBORS, Move, canOccupy, canStand, edgeDuration, edgeValid, landingY, neighbors } from './nav';
 import {
   JOB_CHUNK, OrderStore, canPlaceBuild, canPlaceDeconstruct, canPlaceDig, hasWorkPositions, inReach,
-  needsDig, orderCost, orderIsSolidBuild, orderStillValid, workPositions, type Cost, type OperateTask, type Order,
+  SKILL_INDEX, needsDig, orderCost, orderIsSolidBuild, orderSkill, orderStillValid, workPositions, type Cost,
+  type OperateTask, type Order,
 } from './orders';
 import { PathService, type Path } from './pathfinder';
 import { Regions } from './regions';
@@ -97,6 +100,8 @@ export class World {
   readonly orders: OrderStore;
   readonly light: LightMap;
   readonly rng: Rng;
+  /** Colonist aptitudes only (keeps the main stream unchanged by them). */
+  private readonly aptRng: Rng;
   colonists: Colonist[] = [];
   resources: Record<ResourceId, number> = { ...START_RESOURCES };
   power: PowerStats = { gen: 0, use: 0, unmet: 0, spare: 0, stored: 0, capacity: 0 };
@@ -137,6 +142,7 @@ export class World {
   constructor(grid: Grid, seed: number) {
     this.grid = grid;
     this.rng = new Rng(seed);
+    this.aptRng = new Rng((seed ^ 0x5eed1e) >>> 0);
     this.regions = new Regions(grid);
     this.paths = new PathService(grid, this.regions);
     this.buildings = new BuildingStore(grid);
@@ -162,8 +168,27 @@ export class World {
     c.phase = this.rng.next() * Math.PI * 2;
     // stagger starting needs so the colony doesn't all queue for the toilet at once
     for (const n of NEEDS) c.needs[n] = 70 + this.rng.next() * 30;
+    this.rollAptitudes(c);
     this.colonists.push(c);
     return c;
+  }
+
+  /**
+   * Born with 1-2 likings; sometimes one is a love, which comes with a hate (a skill the colonist
+   * never works in). Likings start a level or two ahead. Uses its own RNG stream so aptitudes
+   * don't shift the rest of the simulation.
+   */
+  private rollAptitudes(c: Colonist): void {
+    const r = this.aptRng;
+    const pool = SKILLS.slice();
+    const take = (): SkillId => pool.splice(Math.floor(r.next() * pool.length), 1)[0];
+    const n = r.next() < TWO_LIKES_CHANCE ? 2 : 1;
+    const liked: SkillId[] = [];
+    for (let i = 0; i < n; i++) liked.push(take());
+    const love = r.next() < LOVE_CHANCE;
+    liked.forEach((s, i) => (c.aptitude[s] = love && i === 0 ? 'love' : 'like'));
+    if (love) c.aptitude[take()] = 'hate';
+    for (const s of liked) c.xp[s] = levelXp(APTITUDE[c.aptitude[s] as 'like' | 'love'].startLevel);
   }
 
   issue(cmd: Command): void {
@@ -217,6 +242,8 @@ export class World {
   applyCommand(cmd: Command): void {
     if (cmd.type === 'configure') {
       this.configure(cmd.buildingId, cmd.on, cmd.crop, cmd.lamp);
+      const b = this.buildings.get(cmd.buildingId);
+      if (b && cmd.priority !== undefined) this.setBuildingPriority(b, cmd.priority);
       return;
     }
     if (cmd.type === 'research') {
@@ -278,6 +305,14 @@ export class World {
           if (o) this.cancelOrder(o);
         });
         break;
+      case 'prioritize':
+        this.forRect(rect, (cell) => {
+          const o = this.orders.at(cell);
+          if (o) this.orders.setPriority(o, cmd.priority);
+          const b = this.buildings.at(cell);
+          if (b) this.setBuildingPriority(b, cmd.priority);
+        });
+        break;
     }
     this.wakeIdle = true;
   }
@@ -320,6 +355,23 @@ export class World {
     }
     if (lamp !== undefined && b.kind === 'planter' && this.research.done.has('growlamps')) b.lamp = lamp;
     this.wakeIdle = true;
+  }
+
+  /** Buildings colonists work at (those with a jobPriority) take a player priority; its pending job follows. */
+  private setBuildingPriority(b: Building, p: number): void {
+    if (BUILDS[b.kind].jobPriority === undefined || p < 1 || p > EMERGENCY) return;
+    b.priority = p;
+    const o = this.opOrders.get(b.id);
+    if (o) this.orders.setPriority(o, this.opPriority(b, o.task!));
+    this.wakeIdle = true;
+  }
+
+  /** Priority for a building's automatic job: its own, raised for meals while they run short. */
+  private opPriority(b: Building, task: OperateTask): number {
+    if ((task === 'cook' || task === 'print') && b.priority < EMERGENCY && this.resources.food < this.aliveCount) {
+      return Math.min(9, b.priority + FOOD_SHORT_BONUS);
+    }
+    return b.priority;
   }
 
   // ------------------------------------------------------------------ research
@@ -412,18 +464,19 @@ export class World {
   /**
    * Once a second, each machine without a pending job may get one:
    * Cooking Stations (crops -> meal) then Ration Printers (matter -> meal) top the meal stock up to
-   * the target; planters get sown when empty and harvested when ripe; manual generators get
-   * cranked while power is short.
+   * the target; planters get sown when empty and harvested when ripe; outhouses get cleaned;
+   * stations research the active project; fuel generators get refuelled when their tank is low;
+   * manual generators get cranked while power is short. Jobs take the building's priority.
    */
   private manageMachines(): void {
     for (const [id, o] of this.opOrders) if (o.removed) this.opOrders.delete(id);
-    const foodPrio = this.resources.food < this.aliveCount ? PRINTER_PRIORITY_SHORT : PRINTER_PRIORITY;
     let planned = this.resources.food;
     const reserved: Cost = {};
     for (const o of this.opOrders.values()) {
       if (o.task !== 'cook' && o.task !== 'print') continue;
       planned++;
-      if (o.priority < foodPrio) this.orders.setPriority(o, foodPrio);
+      const p = this.opPriority(this.buildings.get(o.buildingId)!, o.task);
+      if (o.priority !== p) this.orders.setPriority(o, p);
       if (!o.paid) for (const r of RESOURCES) if (o.opCost[r]) reserved[r] = (reserved[r] ?? 0) + o.opCost[r]!;
     }
     for (const b of this.buildings.ofKind('stove')) {
@@ -433,29 +486,37 @@ export class World {
       if (!crop) break;
       const n = CROPS[crop].perMeal;
       reserved[crop] = (reserved[crop] ?? 0) + n;
-      this.addOp(b, 'cook', foodPrio, COOK_WORK, { [crop]: n });
+      this.addOp(b, 'cook', COOK_WORK, { [crop]: n });
       planned++;
     }
     for (const b of this.buildings.ofKind('printer')) {
       if (planned >= this.foodTarget) break;
       if (!b.on || this.opOrders.has(b.id)) continue;
-      this.addOp(b, 'print', foodPrio, PRINTER_WORK, { matter: PRINTER_MATTER });
+      this.addOp(b, 'print', PRINTER_WORK, { matter: PRINTER_MATTER });
       planned++;
     }
     for (const b of this.buildings.ofKind('planter')) {
       if (!b.on || this.opOrders.has(b.id)) continue;
-      if (!b.planted) this.addOp(b, 'sow', FARM_PRIORITY, SOW_WORK, CROPS[b.crop].sowCost);
-      else if (b.growth >= 1) this.addOp(b, 'harvest', FARM_PRIORITY, HARVEST_WORK, {});
+      if (!b.planted) this.addOp(b, 'sow', SOW_WORK, CROPS[b.crop].sowCost);
+      else if (b.growth >= 1) this.addOp(b, 'harvest', HARVEST_WORK, {});
     }
     for (const b of this.buildings.ofKind('toilet')) {
-      if (b.dirty && !this.opOrders.has(b.id)) this.addOp(b, 'clean', CLEAN_PRIORITY, CLEAN_WORK, {});
+      if (b.dirty && !this.opOrders.has(b.id)) this.addOp(b, 'clean', CLEAN_WORK, {}, CLEAN_PRIORITY);
+    }
+    for (const kind of ['coalgen', 'reactor'] as BuildKind[]) {
+      const f = BUILDS[kind].fuel!;
+      for (const b of this.buildings.ofKind(kind)) {
+        if (!b.on || this.opOrders.has(b.id) || b.tank >= f.tank * REFUEL_BELOW) continue;
+        const amount = Math.min(Math.ceil(f.tank - b.tank), Math.floor(this.resources[f.res]));
+        if (amount >= 1) this.addOp(b, 'refuel', REFUEL_WORK, { [f.res]: amount });
+      }
     }
     const act = this.research.active;
     if (act) {
       for (const kind of ['research', 'advresearch'] as BuildKind[]) {
         if (RESEARCH[act].tier > STATION_TIER[kind]!) continue;
         for (const b of this.buildings.ofKind(kind)) {
-          if (b.on && !this.opOrders.has(b.id)) this.addOp(b, 'research', RESEARCH_PRIORITY, RESEARCH_WORK, {});
+          if (b.on && !this.opOrders.has(b.id)) this.addOp(b, 'research', RESEARCH_WORK, {});
         }
       }
     }
@@ -464,7 +525,7 @@ export class World {
     this.powerBlocked = false;
     if (short) {
       for (const b of this.buildings.ofKind('crank')) {
-        if (b.on && !this.opOrders.has(b.id)) this.addOp(b, 'crank', CRANK_PRIORITY, CRANK_WORK, {});
+        if (b.on && !this.opOrders.has(b.id)) this.addOp(b, 'crank', CRANK_WORK, {});
       }
     }
   }
@@ -474,7 +535,8 @@ export class World {
     return this.opOrders.get(buildingId);
   }
 
-  private addOp(b: Building, task: OperateTask, priority: number, work: number, cost: Cost): void {
+  /** Queue a building's automatic job, at the building's priority unless one is given. */
+  private addOp(b: Building, task: OperateTask, work: number, cost: Cost, priority = this.opPriority(b, task)): void {
     const o = this.orders.create('operate', useCell(this.grid, b, 0), priority, null, { buildingId: b.id, work, task, cost });
     this.opOrders.set(b.id, o);
     this.wakeIdle = true;
@@ -519,7 +581,7 @@ export class World {
 
   /**
    * Settle one second of power over the colony-wide pool:
-   * cranking adds what was cranked; fuel generators (building id order) run while batteries are
+   * cranking adds what was cranked; fuel generators (building id order, burning from their tank) run while batteries are
    * low (with hysteresis) or can't cover what demand exceeds supply, burning fuel; consumers are served in building
    * id order from generation + batteries (brownout: the rest go unpowered); the surplus charges
    * the batteries, which leak a little.
@@ -561,13 +623,13 @@ export class World {
     for (const b of gens) {
       const d = BUILDS[b.kind];
       const burn = d.fuel!.perSec * secs;
-      const canRun = b.on && this.resources[d.fuel!.res] >= burn;
+      const canRun = b.on && b.tank >= burn - 1e-9;
       const low = capacity > 0 && stored < capacity * (b.powered ? GEN_STOP : GEN_START);
       const deficit = demand > supply && stored < (demand - supply) * secs;
       b.powered = canRun && (deficit || low);
       if (b.powered) {
         supply += d.powerGen!;
-        this.resources[d.fuel!.res] -= burn;
+        b.tank = Math.max(0, b.tank - burn);
       } else if (canRun) idleGen += d.powerGen!;
     }
     const avail = supply * secs + stored;
@@ -647,10 +709,17 @@ export class World {
     const ccx = (c.x / JOB_CHUNK) | 0, ccy = (c.y / JOB_CHUNK) | 0;
     const maxR = Math.max(os.jcw, os.jch);
     const cand: Order[] = [];
+    const NS = SKILLS.length;
     let checks = 0;
-    for (let p = EMERGENCY; p >= minPriority; p--) {
-      const total = os.availCount[p];
-      if (total === 0) continue;
+    // skills grouped by the priority bonus they get from this colonist; hated skills in none
+    const bySkillBonus: boolean[][] = [];
+    for (let d = 0; d <= MAX_PRIORITY_BONUS; d++) bySkillBonus.push(SKILLS.map((s) => !c.hates(s) && c.priorityBonus(s) === d));
+
+    /** Nearest workable order in bucket p whose skill is in `accept`; 'abort' when the check budget is spent. */
+    const scan = (p: number, accept: boolean[]): { order: Order; goals: number[] } | null | 'abort' => {
+      let total = 0;
+      for (let s = 0; s < NS; s++) if (accept[s]) total += os.availSkill[p * NS + s];
+      if (total === 0) return null;
       const row = os.spatial[p];
       let seen = 0;
       for (let r = 0; r <= maxR && seen < total; r++) {
@@ -663,12 +732,12 @@ export class World {
             const set = row[cy * os.jcw + cx];
             if (!set || set.size === 0) continue;
             for (const o of set) {
-              if (o.claimedBy >= 0) continue;
+              if (o.claimedBy >= 0 || !accept[SKILL_INDEX[orderSkill(o)]]) continue;
               seen++;
               if (o.unreach && o.unreach.get(rid) === rver) continue;
               if (o.deferUntil > this.tick) continue;
               if (this.waitsForBelow(o)) continue;
-              if (o.kind === 'operate' && !this.opPowered(o)) continue;
+              if (o.kind === 'operate' && (!this.opPowered(o) || !this.qualified(c, o))) continue;
               if (this.needsPayment(o) && !this.canAfford(orderCost(o))) {
                 this.buildsWaiting = true;
                 continue;
@@ -680,15 +749,40 @@ export class World {
         if (cand.length === 0) continue;
         cand.sort((a, b) => Math.abs(a.x - c.x) + Math.abs(a.y - c.y) - Math.abs(b.x - c.x) - Math.abs(b.y - c.y));
         for (const o of cand) {
-          if (++checks > MAX_JOB_CHECKS) return null;
+          if (++checks > MAX_JOB_CHECKS) return 'abort';
           if (!orderStillValid(g, o, this.buildings)) continue;
           const goals = this.reachableGoals(o, reach, rid);
           if (goals.length) return { order: o, goals };
           (o.unreach ??= new Map()).set(rid, rver);
         }
       }
+      return null;
+    };
+
+    // Emergency first, whatever the colonist likes (hated skills excepted).
+    const anyBut = SKILLS.map((s) => !c.hates(s));
+    const em = scan(EMERGENCY, anyBut);
+    if (em === 'abort') return null;
+    if (em || minPriority >= EMERGENCY) return em;
+    // Then by effective priority: a liked job at priority p counts as p + bonus for this colonist.
+    // At equal effective priority, the higher real priority goes first.
+    for (let e = 9 + MAX_PRIORITY_BONUS; e >= minPriority; e--) {
+      for (let d = 0; d <= MAX_PRIORITY_BONUS; d++) {
+        const p = e - d;
+        if (p < 1 || p > 9) continue;
+        const found = scan(p, bySkillBonus[d]);
+        if (found === 'abort') return null;
+        if (found) return found;
+      }
     }
     return null;
+  }
+
+  /** Skill requirements: the Advanced Research Station needs a trained researcher. */
+  private qualified(c: Colonist, o: Order): boolean {
+    if (o.task !== 'research') return true;
+    const b = this.buildings.get(o.buildingId);
+    return !b || b.kind !== 'advresearch' || c.level('research') >= ADV_RESEARCH_LEVEL;
   }
 
   /**
@@ -1550,12 +1644,15 @@ export class World {
       return;
     }
     c.phase += DT * 6;
+    const skill = orderSkill(o);
     const speed = (c.needs.hygiene < DIRTY_THRESHOLD ? DIRTY_WORK_SPEED : 1) *
-      (this.light.lights(g, c.cell) ? LIGHT_WORK_BONUS : 1);
+      (this.light.lights(g, c.cell) ? LIGHT_WORK_BONUS : 1) *
+      (1 + SKILL_SPEED_PER_LEVEL * c.level(skill));
 
     // Phase 1 (tile builds on natural tiles): dig the tile out.
     if (needsDig(g, o)) {
       o.digProgress += DT * speed;
+      this.train(c, 'digging');
       if (o.digProgress >= o.digWork) this.digOut(o.x, o.y);
       return;
     }
@@ -1605,6 +1702,7 @@ export class World {
     }
     o.waitingClear = false;
     o.progress += DT * speed;
+    this.train(c, skill);
     if (o.task === 'research' && !this.addResearch(o, DT * speed)) return;
     if (o.progress >= o.work) {
       // re-check: another wall may have gone up next to us while we worked
@@ -1616,6 +1714,14 @@ export class World {
       }
       this.completeOrder(c, o);
     }
+  }
+
+  /** A tick of work: XP in the skill (faster for likings); level-ups are announced. */
+  private train(c: Colonist, s: SkillId): void {
+    const before = c.level(s);
+    c.xp[s] += DT * c.xpRate(s);
+    const after = c.level(s);
+    if (after > before) this.events.push({ type: 'message', text: `${c.name} reached ${SKILL_LABEL[s]} level ${after}.` });
   }
 
   /** Remove a natural tile and add its yield to the stockpile. */
@@ -1852,6 +1958,9 @@ export class World {
         } else if (o.task === 'clean') {
           b.uses = 0;
           b.dirty = false;
+        } else if (o.task === 'refuel') {
+          const f = BUILDS[b.kind].fuel!;
+          b.tank = Math.min(f.tank, b.tank + (o.opCost[f.res] ?? 0));
         }
         if (this.opOrders.get(b.id) === o) this.opOrders.delete(b.id);
         break;
