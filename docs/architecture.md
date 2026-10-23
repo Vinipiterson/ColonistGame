@@ -23,6 +23,9 @@ TypeScript (strict) + Canvas 2D, Vite (single-file build), Vitest (headless sim 
 - Power (M3): one colony-wide pool, no wires (matches the global stockpile). Buildings keep enough state that per-network wiring can be added later.
 - Food (M3): harvests give raw crops (own resources); a powered Cooking Station turns them into meals and is used before the Ration Printer. With no meals, colonists eat a raw portion (the amount that makes a meal): +60 hunger, 1.5× slower.
 - Ration Printer needs power (200 W while printing), so the first power source is usually a Manual Generator; the colony starts with 6 meals.
+- Research (M3b): most buildings and crops are unlocked by research. Starting kit: Wall, Ladder, Stairs, Door, Bed, Outhouse, Sink, Mess Table, Ration Printer, Manual Generator, Research Station. Research Station (100 W) does tier 1 only; tier 1 includes Advanced Research, which unlocks the Advanced Research Station (200 W) for tier 2. Tiered point costs slow progress down. A skill/level requirement for the advanced station waits for M4 skills.
+- Outhouse: dirty after 5 uses, unusable until a colonist cleans it (automatic job, priority 7). The Flush Toilet (Advanced Furniture) cleans itself.
+- Grow lamp: a researched planter upgrade (inspector switch): 60 W, +50% growth for any crop; sunberries only grow under it.
 - Lamps: light radius 5, blocked by solid tiles (line of sight); +10% work speed in lit cells.
 
 ## Farming & power (M3)
@@ -30,11 +33,11 @@ TypeScript (strict) + Canvas 2D, Vite (single-file build), Vitest (headless sim 
 |---|---|---|---|---|---|
 | Mushroom | — | 3 days | 2 | nothing | 2 → 1 meal |
 | Tuber | 20 matter | 2 days | 2 | nothing | 2 → 1 meal |
-| Sunberry | 10 coal | 1 day | 2 | 60 W grow lamp | 1 → 1 meal |
+| Sunberry | 10 coal | 1 day | 2 | powered grow lamp | 1 → 1 meal |
 
 | Building | Size | Power | Notes |
 |---|---|---|---|
-| Planter | 1×2 | crop's lamp | crop picked in the inspector (changing it uproots); auto sow / harvest jobs |
+| Planter | 1×2 | 60 W with grow lamp | crop picked in the inspector (changing it uproots); auto sow / harvest jobs |
 | Cooking Station | 2×2 | 150 W while cooking | crop with the most meals' worth in stock |
 | Ration Printer | 2×2 | 200 W while printing | 100 matter → 1 meal |
 | Manual Generator | 2×2 | +400 W while cranked | crank jobs (30 s, priority 7) while power is short; hunger and sleep drain 2× |
@@ -47,7 +50,26 @@ TypeScript (strict) + Canvas 2D, Vite (single-file build), Vitest (headless sim 
 - Workstations draw power only while a colonist works there. Their jobs are only taken with power available (≥ 5 s of draw stored, or spare generation); a colonist at an unpowered one gives up after 3 s. Skipped/unmet power triggers crank jobs.
 - Automatic jobs are operate orders with a task (print / cook / sow / harvest / crank) and their own cost, one per building (`opOrders`). Meals: stoves then printers top the stock up to max(4, 2×colonists).
 - Light map (src/sim/light.ts): rebuilt only when a lamp's powered state changes or the grid changes near a lit lamp.
-- Inspector: clicking a building shows status + controls (crop, on/off) and issues `configure` commands.
+- Inspector: clicking a building shows status + controls (crop, grow lamp, on/off) and issues `configure` commands.
+
+## Research (M3b)
+| Tier | Project | Cost | Needs | Unlocks |
+|---|---|---|---|---|
+| 1 | Basic Farming | 300 | — | Planter, Mushroom |
+| 1 | Batteries | 300 | — | Battery |
+| 1 | Electric Lighting | 300 | — | Ceiling Lamp |
+| 1 | Showers | 300 | — | Shower |
+| 1 | Advanced Research | 600 | — | Advanced Research Station |
+| 2 | Tuber Cultivation | 800 | Basic Farming, Adv. Research | Tuber |
+| 2 | Cooking | 800 | Basic Farming, Adv. Research | Cooking Station |
+| 2 | Coal Power | 1000 | Batteries, Adv. Research | Coal Generator |
+| 2 | Grow Lamps | 1500 | Basic Farming, Lighting, Adv. Research | planter grow lamp |
+| 2 | Advanced Furniture | 1500 | Showers, Adv. Research | Flush Toilet |
+| 2 | Sunberries | 2000 | Tubers, Grow Lamps | Sunberry |
+| 2 | Nuclear Power | 4000 | Coal Power | Reactor |
+
+- Points = seconds of research work (light bonus applies). One active project; progress is kept per project. Stations get automatic 30 s research jobs (priority 5) while a project they can do is active; powered like other workstations. Data in `RESEARCH` (src/sim/defs.ts); `World.research`, `isUnlocked`, `cropUnlocked`, `completeResearch`, `unlockAll` (tests).
+- Build commands for locked kinds are refused by the sim; the build bar greys them out. Research panel: T, the toolbar button or the research chip.
 
 ## Needs
 | Need | Satisfied by | At zero |
@@ -78,5 +100,6 @@ Thresholds per need: want (handle after the current job), urgent (drop the job, 
 1. DONE. World gen, camera, movement (walk/fall/ladder/scramble), Dig, Build (wall, ladder; into natural tiles), Deconstruct, Cancel, priority widget + Emergency, path revalidation, resources.
 2. DONE. Multi-tile buildings + placement validation, rotatable stair blocks (R), automatic doors, needs + need buildings, Ration Printer, deaths, anti-trap rules, lose screen. 45 unit/scenario tests + 2 browser runs; benchmark ~1.5 ms/tick avg.
 3. DONE. Planters with three crops, raw crops + Cooking Station, raw eating; power pool with manual/coal generators, reactor, batteries, brownouts; powered printer; ceiling lamps with occluded light and a work bonus; building inspector; build bar tabs. 56 unit/scenario tests + 3 browser runs; benchmark ~0.65 ms/tick avg.
-4. NEXT. Skills/XP/likings, rooms + bonuses.
+3b. DONE. Research: Research / Advanced Research Stations, two-tier tree gating most buildings and crops, research panel; Outhouse that needs cleaning + Flush Toilet; planter grow lamp upgrade. 64 unit/scenario tests + 3 browser runs; benchmark ~0.65 ms/tick avg.
+4. NEXT. Skills/XP/likings (incl. a research level for the Advanced Research Station), rooms + bonuses.
 5. Arrivals + beacon, save/load, performance pass to 500 colonists.

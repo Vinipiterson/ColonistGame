@@ -3,13 +3,15 @@
 // Reads sim state each frame; writes only to ToolState, or issues sim Commands (inspector).
 
 import {
-  BUILDS, BUILD_LIST, CROPS, CROP_LIST, DAY_SECONDS, EMERGENCY, NEEDS, NEED_DEFS, NEED_LABEL, RESOURCE_LABEL,
-  RESOURCES, type BuildCategory, type BuildKind, type CropId,
+  BUILDS, BUILD_LIST, BUILD_RESEARCH, CROPS, CROP_LIST, CROP_RESEARCH, DAY_SECONDS, EMERGENCY, GROW_LAMP_BONUS,
+  GROW_LAMP_W, NEEDS, NEED_DEFS, NEED_LABEL, OUTHOUSE_USES, RESEARCH, RESOURCE_LABEL, RESOURCES, type BuildCategory,
+  type BuildKind, type CropId,
 } from '../sim/defs';
 import type { Building } from '../sim/buildings';
 import { buildIcon } from '../render/art';
 import type { World } from '../sim/world';
 import type { ToolMode, ToolState } from './input';
+import { ResearchPanel } from './research';
 
 const TOOL_BUTTONS: { mode: ToolMode; label: string; key: string; hint: string }[] = [
   { mode: 'dig', label: 'Dig', key: 'G', hint: 'Drag over natural tiles to dig them out.' },
@@ -23,10 +25,10 @@ const RES_COLOR: Record<string, string> = {
   mushroom: '#c0503a', tuber: '#b5835a', sunberry: '#ff7a4d', food: '#f2a93b',
 };
 const CATEGORY_LABEL: Record<BuildCategory, string> = {
-  structure: 'Structure', furniture: 'Furniture', food: 'Food', power: 'Power & light',
+  structure: 'Structure', furniture: 'Furniture', food: 'Food', power: 'Power & light', science: 'Science',
 };
 /** Buildings with an on/off switch in the inspector. */
-const SWITCHABLE = new Set<BuildKind>(['planter', 'printer', 'stove', 'crank', 'coalgen', 'reactor', 'lamp']);
+const SWITCHABLE = new Set<BuildKind>(['planter', 'printer', 'stove', 'crank', 'coalgen', 'reactor', 'lamp', 'research', 'advresearch']);
 const CROP_SET = new Set<string>(CROP_LIST);
 
 const kJ = (j: number) => (j / 1000).toFixed(j < 10_000 ? 1 : 0);
@@ -45,6 +47,11 @@ export class Hud {
   private resChips: Record<string, HTMLElement> = {};
   private powerChip!: HTMLElement;
   private powerEl!: HTMLElement;
+  private researchEl!: HTMLElement;
+  private researchBtn!: HTMLButtonElement;
+  private researchPanel!: ResearchPanel;
+  /** Research done count the build bar lock state was last synced for. */
+  private locksFor = -1;
   private popEl!: HTMLElement;
   private dayEl!: HTMLElement;
   private speedBtns: HTMLButtonElement[] = [];
@@ -94,6 +101,13 @@ export class Hud {
     this.powerEl = el('span', 'chip-val', '');
     this.powerChip.append(this.powerEl);
     top.append(this.powerChip);
+    const rchip = el('button', 'chip chip-research');
+    rchip.title = 'Research (T)';
+    rchip.append(el('span', 'chip-label', '⚗ Research'));
+    this.researchEl = el('span', 'chip-val', '');
+    rchip.append(this.researchEl);
+    rchip.onclick = () => this.tools.set({ research: !this.tools.research });
+    top.append(rchip);
     const pop = el('div', 'chip');
     pop.append(el('span', 'chip-label', 'Colonists'));
     this.popEl = el('span', 'chip-val', '3');
@@ -136,6 +150,7 @@ export class Hud {
       if (!t || !b) return;
       if (t.dataset.act === 'crop') this.world.issue({ type: 'configure', buildingId: b.id, crop: t.dataset.crop as CropId });
       else if (t.dataset.act === 'toggle') this.world.issue({ type: 'configure', buildingId: b.id, on: !b.on });
+      else if (t.dataset.act === 'lamp') this.world.issue({ type: 'configure', buildingId: b.id, lamp: !b.lamp });
     });
     root.append(this.bpanel);
 
@@ -148,7 +163,7 @@ export class Hud {
     this.buildBar = el('div', 'buildbar panel hidden');
     const tabs = el('div', 'btabs');
     this.buildBar.append(tabs);
-    for (const cat of ['structure', 'furniture', 'food', 'power'] as BuildCategory[]) {
+    for (const cat of ['structure', 'furniture', 'food', 'power', 'science'] as BuildCategory[]) {
       const tab = el('button', 'btn btab', CATEGORY_LABEL[cat]);
       tab.dataset.cat = cat;
       tab.onclick = () => {
@@ -173,7 +188,10 @@ export class Hud {
         const size = d.shape === 'building' ? `${d.w}×${d.h} · ` : '';
         b.append(icon, el('span', 'bname', d.name), el('span', 'bcost', size + cost));
         b.title = d.hint + (d.rotatable ? ' Press R to flip.' : '');
-        b.onclick = () => this.tools.set({ build: k, mode: 'build' });
+        b.onclick = () => {
+          if (this.world.isUnlocked(k)) this.tools.set({ build: k, mode: 'build' });
+          else this.log(`${d.name} needs the "${RESEARCH[BUILD_RESEARCH[k]!].name}" research (T).`, 'bad');
+        };
         this.buildBtns.set(k, b);
         row.append(b);
       }
@@ -189,6 +207,11 @@ export class Hud {
       this.toolBtns.set(t.mode, b);
       toolbar.append(b);
     }
+    this.researchBtn = el('button', 'btn tool tool-research');
+    this.researchBtn.append(el('span', 'tool-label', 'Research'), el('kbd', '', 'T'));
+    this.researchBtn.title = 'Pick what the research stations work on.';
+    this.researchBtn.onclick = () => this.tools.set({ research: !this.tools.research });
+    toolbar.append(this.researchBtn);
     this.hintEl = el('div', 'hud-hint');
     bl.append(this.hintEl, this.buildBar, toolbar);
     root.append(bl);
@@ -214,6 +237,9 @@ export class Hud {
     pr.append(grid, em);
     root.append(pr);
 
+    this.researchPanel = new ResearchPanel(this.world, () => this.tools.set({ research: false }));
+    root.append(this.researchPanel.el);
+
     // game over
     this.overlay = el('div', 'overlay hidden');
     const box = el('div', 'overlay-box panel');
@@ -232,6 +258,8 @@ export class Hud {
     for (const [k, b] of this.buildBtns) b.classList.toggle('active', t.build === k);
     for (const [c, b] of this.tabBtns) b.classList.toggle('active', this.buildCat === c);
     for (const [c, r] of this.catRows) r.classList.toggle('hidden', this.buildCat !== c);
+    this.researchBtn.classList.toggle('active', t.research);
+    this.researchPanel.el.classList.toggle('hidden', !t.research);
     for (const [p, b] of this.prioBtns) b.classList.toggle('active', t.priority === p);
     this.speedBtns.forEach((b, i) => b.classList.toggle('active', i === 0 ? t.paused : !t.paused && t.speed === i));
     const tb = TOOL_BUTTONS.find((x) => x.mode === t.mode);
@@ -276,6 +304,11 @@ export class Hud {
       if (this.powerEl.textContent !== txt) this.powerEl.textContent = txt;
       this.powerChip.classList.toggle('bad', p.unmet > 0);
     }
+    const r = w.research;
+    const rtxt = r.active ? `${RESEARCH[r.active].name} ${Math.floor(((r.progress[r.active] ?? 0) / RESEARCH[r.active].cost) * 100)}%` : 'none';
+    if (this.researchEl.textContent !== rtxt) this.researchEl.textContent = rtxt;
+    if (this.locksFor !== r.done.size) this.syncLocks();
+    this.researchPanel.update();
     const pop = `${w.aliveCount}`;
     if (this.popEl.textContent !== pop) this.popEl.textContent = pop;
     const secs = w.seconds;
@@ -300,6 +333,20 @@ export class Hud {
     this.updateBuildingPanel();
   }
 
+  /** Grey out build buttons whose research isn't done (re-run when research completes). */
+  private syncLocks(): void {
+    this.locksFor = this.world.research.done.size;
+    for (const [k, b] of this.buildBtns) {
+      const kind = k as BuildKind;
+      const locked = !this.world.isUnlocked(kind);
+      b.classList.toggle('locked', locked);
+      const d = BUILDS[kind];
+      b.title = locked
+        ? `Locked: research "${RESEARCH[BUILD_RESEARCH[kind]!].name}" (T). ${d.hint}`
+        : d.hint + (d.rotatable ? ' Press R to flip.' : '');
+    }
+  }
+
   private updateBuildingPanel(): void {
     const b = this.selectedBuilding >= 0 ? this.world.buildings.get(this.selectedBuilding) : undefined;
     if (!b || this.selectedId >= 0) {
@@ -310,9 +357,15 @@ export class Hud {
     const d = BUILDS[b.kind];
     let s = `<div class="cp-name">${d.name}</div><div class="bp-hint">${d.hint}</div>`;
     if (b.kind === 'planter') {
-      s += `<div class="bp-crops">` + CROP_LIST.map((k) =>
-        `<button class="btn bp-crop${b.crop === k ? ' active' : ''}" data-act="crop" data-crop="${k}">${CROPS[k].name}</button>`,
-      ).join('') + `</div><div class="bp-hint">${CROPS[b.crop].hint}</div>`;
+      const w = this.world;
+      s += `<div class="bp-crops">` + CROP_LIST.map((k) => {
+        const locked = !w.cropUnlocked(k);
+        const title = locked ? ` title="Research &quot;${RESEARCH[CROP_RESEARCH[k]!].name}&quot; first"` : '';
+        return `<button class="btn bp-crop${b.crop === k ? ' active' : ''}${locked ? ' locked' : ''}" data-act="crop" data-crop="${k}"${title}>${CROPS[k].name}</button>`;
+      }).join('') + `</div><div class="bp-hint">${CROPS[b.crop].hint}</div>`;
+      if (w.research.done.has('growlamps')) {
+        s += `<button class="btn bp-lamp${b.lamp ? ' active' : ''}" data-act="lamp">Grow lamp ${b.lamp ? 'on' : 'off'} (${GROW_LAMP_W} W, +${Math.round((GROW_LAMP_BONUS - 1) * 100)}% growth)</button>`;
+      }
     }
     if (SWITCHABLE.has(b.kind)) {
       s += `<button class="btn bp-toggle${b.on ? ' active' : ''}" data-act="toggle">${b.on ? 'On · click to switch off' : 'Off · click to switch on'}</button>`;
@@ -335,11 +388,13 @@ export class Hud {
     switch (b.kind) {
       case 'planter': {
         const crop = CROPS[b.crop];
-        const state = !b.on ? 'Switched off' : !b.planted ? 'Waiting to be sown'
-          : b.growth >= 1 ? 'Ripe' : crop.powerUse > 0 && !b.powered ? 'No power: not growing' : 'Growing';
+        const lit = b.lamp && b.powered;
+        const state = !b.on ? 'Switched off' : !b.planted ? 'Waiting to be sown' : b.growth >= 1 ? 'Ripe'
+          : crop.needsLamp && !b.lamp ? 'Needs the grow lamp' : crop.needsLamp && !lit ? 'No power: not growing'
+            : lit ? 'Growing (grow lamp)' : 'Growing';
         out += row('Status', state);
         if (b.planted) out += row('Growth', `${Math.floor(b.growth * 100)}%`) + bar(b.growth);
-        if (crop.powerUse > 0) out += row('Grow lamp', `${crop.powerUse} W`);
+        if (b.lamp) out += row('Grow lamp', b.powered ? `${GROW_LAMP_W} W` : 'No power');
         if (job) out += row(job.task === 'sow' ? 'Sowing' : 'Harvest', jobText);
         break;
       }
@@ -367,6 +422,24 @@ export class Hud {
       case 'battery':
         out += row('Charge', `${kJ(b.charge)} / ${kJ(d.capacity!)} kJ`) + bar(b.charge / d.capacity!);
         break;
+      case 'toilet':
+        out += row('Status', b.dirty ? 'Dirty: unusable until cleaned' : `Clean · ${OUTHOUSE_USES - b.uses} uses left`);
+        if (job) out += row('Cleaning', jobText);
+        break;
+      case 'research':
+      case 'advresearch': {
+        const r = w.research;
+        out += row('Power', `${d.powerUse} W while researching`);
+        if (!r.active) out += row('Project', 'None: pick one (T)');
+        else {
+          const rd = RESEARCH[r.active];
+          out += row('Project', rd.name) + bar((r.progress[r.active] ?? 0) / rd.cost);
+          if (rd.tier === 2 && b.kind === 'research') out += row('Status', 'Tier 2: needs the Advanced station');
+          else out += row('Researcher', jobText);
+          if (job && worker && !b.powered) out += row('Status', 'Waiting for power');
+        }
+        break;
+      }
     }
     return out;
   }

@@ -4,7 +4,7 @@
 //   Left click (no tool)   -> select colonist (else building); left drag (no tool) -> pan
 //   Right click            -> leave the current tool (or cancel an in-progress drag)
 //   Right / middle drag    -> pan          Wheel or +/- -> zoom
-//   WASD / arrows pan, G/B/X/C tools, R flip/rotate, Esc, 1-9 priority, 0 emergency, Space pause
+//   WASD / arrows pan, G/B/X/C tools, R flip/rotate, T research, Esc, 1-9 priority, 0 emergency, Space pause
 
 import { buildingPlacements, canPlaceBuilding } from '../sim/buildings';
 import { normRect } from '../sim/commands';
@@ -43,9 +43,11 @@ export class ToolState {
   priority = loadPriority();
   speed = 1;
   paused = false;
+  /** Research panel open. */
+  research = false;
   listeners: (() => void)[] = [];
 
-  set(patch: Partial<Pick<ToolState, 'mode' | 'build' | 'priority' | 'speed' | 'paused' | 'flip'>>): void {
+  set(patch: Partial<Pick<ToolState, 'mode' | 'build' | 'priority' | 'speed' | 'paused' | 'flip' | 'research'>>): void {
     Object.assign(this, patch);
     if (patch.priority !== undefined) {
       try { localStorage.setItem(PRIORITY_KEY, String(patch.priority)); } catch { /* ignore */ }
@@ -189,11 +191,12 @@ export class Input {
     else if (e.code === 'KeyX') t.set({ mode: 'deconstruct' });
     else if (e.code === 'KeyC') t.set({ mode: 'cancel' });
     else if (e.code === 'KeyR') t.set({ flip: !t.flip });
+    else if (e.code === 'KeyT') t.set({ research: !t.research });
     else if (e.code === 'Equal' || e.code === 'NumpadAdd') this.zoomAt(1.25);
     else if (e.code === 'Minus' || e.code === 'NumpadSubtract') this.zoomAt(1 / 1.25);
     else if (e.code === 'Escape') {
       this.dragStart = this.dragEnd = null;
-      t.set({ mode: 'select' });
+      t.set({ mode: 'select', research: false });
     } else if (e.code === 'Space') {
       e.preventDefault();
       t.set({ paused: !t.paused });

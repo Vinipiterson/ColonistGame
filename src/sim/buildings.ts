@@ -29,6 +29,11 @@ export interface Building {
   crop: CropId;
   planted: boolean;
   growth: number;
+  /** Planter: grow lamp switched on (needs the Grow Lamps research). */
+  lamp: boolean;
+  /** Outhouse: uses since it was last cleaned; dirty = unusable until cleaned. */
+  uses: number;
+  dirty: boolean;
   /** Last tick a colonist worked at it (powered workstations draw power only while busy). */
   busyTick: number;
   /** Manual generator: ticks cranked since the last power update. */
@@ -72,7 +77,7 @@ export class BuildingStore {
     const b: Building = {
       id: this.nextId++, kind, x, y, w: d.w, h: d.h, flip,
       users: new Array(Math.max(1, d.slots)).fill(-1), removed: false,
-      on: true, powered: false, charge: 0, crop: DEFAULT_CROP, planted: false, growth: 0, busyTick: -1000, crankTicks: 0,
+      on: true, powered: false, charge: 0, crop: DEFAULT_CROP, planted: false, growth: 0, lamp: false, uses: 0, dirty: false, busyTick: -1000, crankTicks: 0,
     };
     this.byId.set(b.id, b);
     this.ofKind(kind).add(b);
@@ -103,7 +108,7 @@ export function useCell(g: Grid, b: Building, slot: number): number {
     const x = b.flip ? b.x + b.w - 1 : b.x;
     return bottom * g.w + x;
   }
-  if (b.kind === 'printer' || b.kind === 'stove' || b.kind === 'crank') {
+  if (b.kind === 'printer' || b.kind === 'stove' || b.kind === 'crank' || b.kind === 'research' || b.kind === 'advresearch') {
     // operator stands at the control side
     const x = b.flip ? b.x : b.x + b.w - 1;
     return bottom * g.w + x;

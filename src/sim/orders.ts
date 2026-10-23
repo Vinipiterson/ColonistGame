@@ -17,7 +17,7 @@ import { canStand } from './nav';
 
 export type OrderKind = 'dig' | 'build' | 'deconstruct' | 'operate';
 /** What an operate order does at its building. */
-export type OperateTask = 'print' | 'cook' | 'sow' | 'harvest' | 'crank';
+export type OperateTask = 'print' | 'cook' | 'sow' | 'harvest' | 'crank' | 'research' | 'clean';
 export type Cost = Partial<Record<ResourceId, number>>;
 
 export interface Order {
@@ -269,6 +269,7 @@ export function orderStillValid(g: Grid, o: Order, buildings: BuildingStore): bo
       if (!b) return false;
       if (o.task === 'sow') return !b.planted;
       if (o.task === 'harvest') return b.planted && b.growth >= 1;
+      if (o.task === 'clean') return b.dirty;
       return true;
     }
   }

@@ -73,11 +73,12 @@ export const SOLID: Uint8Array = (() => {
 
 export type BuildKind =
   | 'wall' | 'ladder' | 'stairs' // per-tile structures
-  | 'door' | 'bed' | 'toilet' | 'sink' | 'shower' | 'table' // multi-tile buildings
+  | 'door' | 'bed' | 'toilet' | 'flushtoilet' | 'sink' | 'shower' | 'table' // multi-tile buildings
   | 'printer' | 'planter' | 'stove' // food
-  | 'crank' | 'coalgen' | 'battery' | 'reactor' | 'lamp'; // power
+  | 'crank' | 'coalgen' | 'battery' | 'reactor' | 'lamp' // power
+  | 'research' | 'advresearch'; // science
 
-export type BuildCategory = 'structure' | 'furniture' | 'food' | 'power';
+export type BuildCategory = 'structure' | 'furniture' | 'food' | 'power' | 'science';
 
 export interface BuildDef {
   kind: BuildKind;
@@ -135,9 +136,14 @@ export const BUILDS: Record<BuildKind, BuildDef> = {
     hint: 'Restores sleep twice as fast as the floor.',
   },
   toilet: {
-    kind: 'toilet', name: 'Toilet', category: 'furniture', shape: 'building', w: 1, h: 2,
+    kind: 'toilet', name: 'Outhouse', category: 'furniture', shape: 'building', w: 1, h: 2,
     cost: { matter: 80 }, work: 5, solid: false, rotatable: true, slots: 1,
-    hint: 'Relieves bladder. Holding it too long is fatal.',
+    hint: 'Relieves bladder (holding it too long is fatal). Dirty after 5 uses until a colonist cleans it.',
+  },
+  flushtoilet: {
+    kind: 'flushtoilet', name: 'Flush Toilet', category: 'furniture', shape: 'building', w: 1, h: 2,
+    cost: { matter: 200 }, work: 6, solid: false, rotatable: true, slots: 1,
+    hint: 'Relieves bladder and cleans itself.',
   },
   sink: {
     kind: 'sink', name: 'Sink', category: 'furniture', shape: 'building', w: 1, h: 1,
@@ -196,10 +202,20 @@ export const BUILDS: Record<BuildKind, BuildDef> = {
     cost: { matter: 30 }, work: 2, solid: false, rotatable: false, slots: 0, powerUse: 10, mount: 'ceiling',
     hint: 'Hangs under a solid tile, 10 W. Lights 5 tiles around (walls block it): work there is 10% faster.',
   },
+  research: {
+    kind: 'research', name: 'Research Station', category: 'science', shape: 'building', w: 2, h: 2,
+    cost: { matter: 200 }, work: 8, solid: false, rotatable: true, slots: 1, powerUse: 100,
+    hint: 'A colonist researches the selected tier 1 project here (100 W while researching).',
+  },
+  advresearch: {
+    kind: 'advresearch', name: 'Advanced Research Station', category: 'science', shape: 'building', w: 2, h: 2,
+    cost: { matter: 400, coal: 50 }, work: 12, solid: false, rotatable: true, slots: 1, powerUse: 200,
+    hint: 'Researches any project, including tier 2 (200 W while researching).',
+  },
 };
 export const BUILD_LIST: BuildKind[] = [
-  'wall', 'ladder', 'stairs', 'door', 'bed', 'toilet', 'sink', 'shower', 'table',
-  'printer', 'planter', 'stove', 'crank', 'coalgen', 'battery', 'reactor', 'lamp',
+  'wall', 'ladder', 'stairs', 'door', 'bed', 'toilet', 'flushtoilet', 'sink', 'shower', 'table',
+  'printer', 'planter', 'stove', 'crank', 'coalgen', 'battery', 'reactor', 'lamp', 'research', 'advresearch',
 ];
 export const DECONSTRUCT_WORK = 2;
 export const DECONSTRUCT_REFUND = 0.5;
@@ -207,6 +223,61 @@ export const DECONSTRUCT_REFUND = 0.5;
 /** Ration printer recipe. */
 export const PRINTER_MATTER = 100;
 export const PRINTER_WORK = 10;
+
+/** Outhouse: uses before it is dirty (unusable), and the cleaning job. */
+export const OUTHOUSE_USES = 5;
+export const CLEAN_WORK = 6;
+export const CLEAN_PRIORITY = 7;
+
+// ---------------------------------------------------------------- research
+
+export type ResearchId =
+  | 'farming' | 'batteries' | 'lighting' | 'showers' | 'advresearch'
+  | 'tubers' | 'cooking' | 'coal' | 'growlamps' | 'furniture' | 'sunberries' | 'nuclear';
+export type ResearchBranch = 'Farming' | 'Power' | 'Comfort' | 'Science';
+
+export interface ResearchDef {
+  name: string;
+  branch: ResearchBranch;
+  /** 1: any research station; 2: only the Advanced Research Station. */
+  tier: 1 | 2;
+  /** Research points (1 per second of work, faster in the light). */
+  cost: number;
+  needs: ResearchId[];
+  builds?: BuildKind[];
+  crops?: CropId[];
+  /** Unlocks the planter grow lamp. */
+  growLamp?: boolean;
+  hint: string;
+}
+
+export const RESEARCH: Record<ResearchId, ResearchDef> = {
+  farming: { name: 'Basic Farming', branch: 'Farming', tier: 1, cost: 300, needs: [], builds: ['planter'], crops: ['mushroom'], hint: 'Planters and mushrooms.' },
+  batteries: { name: 'Batteries', branch: 'Power', tier: 1, cost: 300, needs: [], builds: ['battery'], hint: 'Store spare power.' },
+  lighting: { name: 'Electric Lighting', branch: 'Power', tier: 1, cost: 300, needs: [], builds: ['lamp'], hint: 'Ceiling lamps: faster work in the light.' },
+  showers: { name: 'Showers', branch: 'Comfort', tier: 1, cost: 300, needs: [], builds: ['shower'], hint: 'Keep colonists clean (dirty ones work slower).' },
+  advresearch: { name: 'Advanced Research', branch: 'Science', tier: 1, cost: 600, needs: [], builds: ['advresearch'], hint: 'The Advanced Research Station, needed for every tier 2 project.' },
+  tubers: { name: 'Tuber Cultivation', branch: 'Farming', tier: 2, cost: 800, needs: ['farming', 'advresearch'], crops: ['tuber'], hint: 'Tubers: faster than mushrooms.' },
+  cooking: { name: 'Cooking', branch: 'Farming', tier: 2, cost: 800, needs: ['farming', 'advresearch'], builds: ['stove'], hint: 'The Cooking Station turns crops into meals.' },
+  coal: { name: 'Coal Power', branch: 'Power', tier: 2, cost: 1000, needs: ['batteries', 'advresearch'], builds: ['coalgen'], hint: 'Coal generators: no more cranking.' },
+  growlamps: { name: 'Grow Lamps', branch: 'Farming', tier: 2, cost: 1500, needs: ['farming', 'lighting', 'advresearch'], growLamp: true, hint: 'A 60 W lamp on planters: crops grow 50% faster.' },
+  furniture: { name: 'Advanced Furniture', branch: 'Comfort', tier: 2, cost: 1500, needs: ['showers', 'advresearch'], builds: ['flushtoilet'], hint: 'The Flush Toilet cleans itself.' },
+  sunberries: { name: 'Sunberries', branch: 'Farming', tier: 2, cost: 2000, needs: ['tubers', 'growlamps'], crops: ['sunberry'], hint: 'Fast and filling, but only grow under a grow lamp.' },
+  nuclear: { name: 'Nuclear Power', branch: 'Power', tier: 2, cost: 4000, needs: ['coal'], builds: ['reactor'], hint: 'The reactor: 3000 W from radioactive matter.' },
+};
+export const RESEARCH_LIST = Object.keys(RESEARCH) as ResearchId[];
+/** Highest research tier each station can work on. */
+export const STATION_TIER: Partial<Record<BuildKind, number>> = { research: 1, advresearch: 2 };
+export const RESEARCH_WORK = 30;
+export const RESEARCH_PRIORITY = 5;
+
+/** The research that unlocks a building / crop (absent = available from the start). */
+export const BUILD_RESEARCH: Partial<Record<BuildKind, ResearchId>> = {};
+export const CROP_RESEARCH: Partial<Record<CropId, ResearchId>> = {};
+for (const id of RESEARCH_LIST) {
+  for (const k of RESEARCH[id].builds ?? []) BUILD_RESEARCH[k] = id;
+  for (const c of RESEARCH[id].crops ?? []) CROP_RESEARCH[c] = id;
+}
 
 // ---------------------------------------------------------------- farming
 
@@ -218,8 +289,8 @@ export interface CropDef {
   growSeconds: number;
   /** Crop units per harvest. */
   yield: number;
-  /** Grow lamp watts; the plant only grows while powered. */
-  powerUse: number;
+  /** Only grows under a powered grow lamp. */
+  needsLamp: boolean;
   /** Crop units the Cooking Station turns into 1 meal (also the size of one raw portion). */
   perMeal: number;
   hint: string;
@@ -227,21 +298,24 @@ export interface CropDef {
 
 export const CROPS: Record<CropId, CropDef> = {
   mushroom: {
-    name: 'Mushroom', sowCost: {}, growSeconds: 3 * DAY_SECONDS, yield: 2, powerUse: 0, perMeal: 2,
+    name: 'Mushroom', sowCost: {}, growSeconds: 3 * DAY_SECONDS, yield: 2, needsLamp: false, perMeal: 2,
     hint: 'Free and slow: 3 days for 2 mushrooms (1 meal).',
   },
   tuber: {
-    name: 'Tuber', sowCost: { matter: 20 }, growSeconds: 2 * DAY_SECONDS, yield: 2, powerUse: 0, perMeal: 2,
+    name: 'Tuber', sowCost: { matter: 20 }, growSeconds: 2 * DAY_SECONDS, yield: 2, needsLamp: false, perMeal: 2,
     hint: '20 matter of fertilizer: 2 days for 2 tubers (1 meal).',
   },
   sunberry: {
-    name: 'Sunberry', sowCost: { coal: 10 }, growSeconds: 1 * DAY_SECONDS, yield: 2, powerUse: 60, perMeal: 1,
-    hint: '10 coal and a 60 W grow lamp: 1 day for 2 sunberries (2 meals).',
+    name: 'Sunberry', sowCost: { coal: 10 }, growSeconds: 1 * DAY_SECONDS, yield: 2, needsLamp: true, perMeal: 1,
+    hint: '10 coal, only grows under a powered grow lamp: 1 day for 2 sunberries (2 meals).',
   },
 };
 export const CROP_LIST: CropId[] = ['mushroom', 'tuber', 'sunberry'];
-export const DEFAULT_CROP: CropId = 'tuber';
+export const DEFAULT_CROP: CropId = 'mushroom';
 export const SOW_WORK = 4;
+/** Planter grow lamp (research): watts while a plant grows, and the growth speed-up. */
+export const GROW_LAMP_W = 60;
+export const GROW_LAMP_BONUS = 1.5;
 export const HARVEST_WORK = 3;
 export const COOK_WORK = 8;
 export const FARM_PRIORITY = 6;

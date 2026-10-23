@@ -72,14 +72,45 @@ await page.evaluate(() => {
 await page.waitForTimeout(200);
 const s = await page.evaluate(() => window.__colony.world.spawn);
 
-// Build through the build bar: three planters, generators, battery, stove, printer, two lamps
+// Research through the UI: planters start locked; pick Basic Farming in the research panel,
+// build a Research Station and a Manual Generator, and let the colony research it.
 await page.keyboard.press('KeyB');
 const groups = await page.$$eval('.btab', (els) => els.map((e) => e.textContent));
-check(groups.includes('Food') && groups.includes('Power & light'), `build bar has Food and Power tabs (${groups.join(', ')})`);
-await pick('planter');
-await drag(s.x - 8, s.y, s.x - 6, s.y); // three side by side
+check(groups.includes('Food') && groups.includes('Power & light') && groups.includes('Science'), `build bar has Food, Power and Science tabs (${groups.join(', ')})`);
+const planterLocked = () => page.$eval('.build-btn[data-build="planter"]', (b) => b.classList.contains('locked'));
+check(await planterLocked(), 'the planter starts locked');
+await pick('research');
+await click(s.x - 1, s.y);
 await pick('crank');
 await click(s.x - 4, s.y);
+await page.keyboard.press('Escape');
+await page.keyboard.press('KeyT');
+check(await page.isVisible('.hud-research'), 'T opens the research panel');
+await page.click('.rcard[data-rid="farming"]');
+await runFed(2);
+check(await page.evaluate(() => window.__colony.world.research.active) === 'farming', 'clicking a project card starts researching it');
+await page.waitForTimeout(150);
+await page.screenshot({ path: `${shots}/m3-00-research.png` });
+await page.keyboard.press('KeyT');
+await page.evaluate(() => {
+  const w = window.__colony.world;
+  for (let i = 0; i < 20 * 600 * 2 && !w.research.done.has('farming'); i++) {
+    if (i % 200 === 0) for (const c of w.colonists) for (const k of Object.keys(c.needs)) c.needs[k] = 100;
+    w.step();
+  }
+});
+const days = await page.evaluate(() => (window.__colony.world.seconds / 600).toFixed(2));
+check(await page.evaluate(() => window.__colony.world.research.done.has('farming')), `Basic Farming researched with a cranked generator (day ${days})`);
+await page.waitForTimeout(150);
+check(!(await planterLocked()), 'the planter is unlocked after the research');
+
+// The rest of the tree is covered by the unit tests: unlock it all and build the farm
+await page.evaluate(() => window.__colony.world.unlockAll());
+
+// Build through the build bar: three planters, battery, stove, generator, printer, two lamps
+await page.keyboard.press('KeyB');
+await pick('planter');
+await drag(s.x - 8, s.y, s.x - 6, s.y); // three side by side
 await pick('battery');
 await click(s.x - 2, s.y);
 await pick('stove');
@@ -108,13 +139,19 @@ await page.evaluate(() => {
 });
 let st = await state();
 check(st.builds === 0, `everything built (${st.builds} build orders left)`);
-check(st.k.planter === 3 && st.k.lamp === 2 && st.k.stove === 1 && st.k.coalgen === 1 && st.k.battery === 1, `buildings exist ${JSON.stringify(st.k)}`);
+check(st.k.planter === 3 && st.k.lamp === 2 && st.k.stove === 1 && st.k.coalgen === 1 && st.k.battery === 1 && st.k.research === 1, `buildings exist ${JSON.stringify(st.k)}`);
 
 // Inspector: click the left planter, choose Sunberry
 await click(s.x - 8, s.y);
 await page.waitForTimeout(150);
 check(await page.isVisible('.hud-building'), 'clicking a planter opens the building inspector');
 await page.click('.bp-crop[data-crop="sunberry"]');
+// the other two grow tubers (new planters start with mushrooms)
+for (const x of [s.x - 7, s.x - 6]) {
+  await click(x, s.y);
+  await page.waitForTimeout(80);
+  await page.click('.bp-crop[data-crop="tuber"]');
+}
 await runFed(2);
 st = await state();
 const crops = st.planters.map((p) => (p.x === s.x - 8 ? 'clicked:' : '') + p.crop);

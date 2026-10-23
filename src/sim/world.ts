@@ -18,7 +18,8 @@ import {
   PRINTER_MATTER, PRINTER_PRIORITY, PRINTER_PRIORITY_SHORT, PRINTER_WORK, RAW_EAT_FACTOR, RAW_HUNGER, RESOURCES,
   SHOWER_TIME, SINK_HYGIENE, SINK_TIME, SKIP_SINK_HYGIENE, SLEEP_HEAL, SOW_WORK, STARVE_DAMAGE, START_RESOURCES,
   TICK_HZ, TILE_INFO, TOILET_TIME, Tile, WALK_SPEED, fallDamage, type BuildKind, type CropId, type NeedId,
-  type ResourceId,
+  type ResourceId, BUILD_RESEARCH, CLEAN_PRIORITY, CLEAN_WORK, CROP_RESEARCH, GROW_LAMP_BONUS, GROW_LAMP_W,
+  OUTHOUSE_USES, RESEARCH, RESEARCH_LIST, RESEARCH_PRIORITY, RESEARCH_WORK, STATION_TIER, type ResearchId,
 } from './defs';
 import {
   BuildingStore, buildingPlacements, canPlaceBuilding, freeSlot, slotUsable, useCell, type Building,
@@ -77,9 +78,16 @@ const NEED_RETRY_TICKS = 100;
 const STUCK_CHECK_TICKS = 100;
 
 const NEED_TASK: Record<NeedId, NeedTaskKind> = { hunger: 'eat', sleep: 'sleep', bladder: 'toilet', hygiene: 'shower' };
-const TASK_BUILDING: Record<NeedTaskKind, BuildKind | null> = {
-  eat: 'table', sleep: 'bed', toilet: 'toilet', sink: 'sink', shower: 'shower',
+const TASK_BUILDINGS: Record<NeedTaskKind, BuildKind[]> = {
+  eat: ['table'], sleep: ['bed'], toilet: ['flushtoilet', 'toilet'], sink: ['sink'], shower: ['shower'],
 };
+
+/** Research state: finished projects, points per project, and the one being worked on. */
+export interface ResearchState {
+  done: Set<ResearchId>;
+  progress: Partial<Record<ResearchId, number>>;
+  active: ResearchId | null;
+}
 
 export class World {
   readonly grid: Grid;
@@ -92,6 +100,7 @@ export class World {
   colonists: Colonist[] = [];
   resources: Record<ResourceId, number> = { ...START_RESOURCES };
   power: PowerStats = { gen: 0, use: 0, unmet: 0, spare: 0, stored: 0, capacity: 0 };
+  research: ResearchState = { done: new Set(), progress: {}, active: null };
   tick = 0;
   events: SimEvent[] = [];
   gameOver = false;
@@ -207,9 +216,14 @@ export class World {
 
   applyCommand(cmd: Command): void {
     if (cmd.type === 'configure') {
-      this.configure(cmd.buildingId, cmd.on, cmd.crop);
+      this.configure(cmd.buildingId, cmd.on, cmd.crop, cmd.lamp);
       return;
     }
+    if (cmd.type === 'research') {
+      this.selectResearch(cmd.id);
+      return;
+    }
+    if (cmd.type === 'build' && !this.isUnlocked(cmd.kind)) return;
     const g = this.grid;
     const rect = normRect(cmd.rect.x0, cmd.rect.y0, cmd.rect.x1, cmd.rect.y1);
     switch (cmd.type) {
@@ -278,8 +292,11 @@ export class World {
     this.orders.remove(o);
   }
 
-  /** Inspector settings. Switching off cancels the building's automatic job; a new crop uproots. */
-  private configure(id: number, on: boolean | undefined, crop: CropId | undefined): void {
+  /**
+   * Inspector settings. Switching off cancels the building's automatic job; a new crop uproots
+   * (locked crops are refused; sunberries switch the grow lamp on, they need it).
+   */
+  private configure(id: number, on: boolean | undefined, crop: CropId | undefined, lamp: boolean | undefined): void {
     const b = this.buildings.get(id);
     if (!b) return;
     const cancelOp = () => {
@@ -294,13 +311,81 @@ export class World {
         b.powered = false;
       }
     }
-    if (crop && b.kind === 'planter' && crop !== b.crop) {
+    if (crop && b.kind === 'planter' && crop !== b.crop && this.cropUnlocked(crop)) {
       cancelOp();
       b.crop = crop;
       b.planted = false;
       b.growth = 0;
+      if (CROPS[crop].needsLamp && this.research.done.has('growlamps')) b.lamp = true;
     }
+    if (lamp !== undefined && b.kind === 'planter' && this.research.done.has('growlamps')) b.lamp = lamp;
     this.wakeIdle = true;
+  }
+
+  // ------------------------------------------------------------------ research
+
+  isUnlocked(kind: BuildKind): boolean {
+    const r = BUILD_RESEARCH[kind];
+    return !r || this.research.done.has(r);
+  }
+  cropUnlocked(crop: CropId): boolean {
+    const r = CROP_RESEARCH[crop];
+    return !r || this.research.done.has(r);
+  }
+  /** Not done yet and every prerequisite done. */
+  researchAvailable(id: ResearchId): boolean {
+    return !this.research.done.has(id) && RESEARCH[id].needs.every((n) => this.research.done.has(n));
+  }
+
+  /** Pick the project stations work on; their pending research jobs are re-planned. */
+  private selectResearch(id: ResearchId | null): void {
+    if (id !== null && !this.researchAvailable(id)) return;
+    this.research.active = id;
+    this.cancelResearchJobs();
+    this.wakeIdle = true;
+  }
+
+  private cancelResearchJobs(): void {
+    for (const o of [...this.opOrders.values()]) if (o.task === 'research') this.cancelOrder(o);
+  }
+
+  /** Finish a project (also used by tests and the e2e scripts to skip ahead). */
+  completeResearch(id: ResearchId): void {
+    const r = this.research;
+    if (r.done.has(id)) return;
+    r.done.add(id);
+    r.progress[id] = RESEARCH[id].cost;
+    const def = RESEARCH[id];
+    const what = [...(def.builds ?? []).map((k) => BUILDS[k].name), ...(def.crops ?? []).map((c) => CROPS[c].name)];
+    if (def.growLamp) what.push('planter grow lamps');
+    this.events.push({ type: 'message', text: `Research complete: ${def.name}${what.length ? ` (${what.join(', ')} unlocked)` : ''}.` });
+    if (r.active === id) {
+      r.active = null;
+      this.cancelResearchJobs();
+    }
+  }
+
+  unlockAll(): void {
+    for (const id of RESEARCH_LIST) this.completeResearch(id);
+    this.events.length = 0;
+  }
+
+  /**
+   * Points from a tick of research work at a station. Returns false when the job ended (project
+   * finished, or the station can't work on it): the colonist is then released.
+   */
+  private addResearch(o: Order, pts: number): boolean {
+    const r = this.research;
+    const b = this.buildings.get(o.buildingId)!;
+    const id = r.active;
+    if (!id || RESEARCH[id].tier > (STATION_TIER[b.kind] ?? 0)) {
+      this.cancelOrder(o);
+      return false;
+    }
+    r.progress[id] = (r.progress[id] ?? 0) + pts;
+    if (r.progress[id]! < RESEARCH[id].cost) return true;
+    this.completeResearch(id); // cancels the research jobs, this one included
+    return false;
   }
 
   // ------------------------------------------------------------------ resources
@@ -362,6 +447,18 @@ export class World {
       if (!b.planted) this.addOp(b, 'sow', FARM_PRIORITY, SOW_WORK, CROPS[b.crop].sowCost);
       else if (b.growth >= 1) this.addOp(b, 'harvest', FARM_PRIORITY, HARVEST_WORK, {});
     }
+    for (const b of this.buildings.ofKind('toilet')) {
+      if (b.dirty && !this.opOrders.has(b.id)) this.addOp(b, 'clean', CLEAN_PRIORITY, CLEAN_WORK, {});
+    }
+    const act = this.research.active;
+    if (act) {
+      for (const kind of ['research', 'advresearch'] as BuildKind[]) {
+        if (RESEARCH[act].tier > STATION_TIER[kind]!) continue;
+        for (const b of this.buildings.ofKind(kind)) {
+          if (b.on && !this.opOrders.has(b.id)) this.addOp(b, 'research', RESEARCH_PRIORITY, RESEARCH_WORK, {});
+        }
+      }
+    }
     const p = this.power;
     const short = p.unmet > 0 || this.powerBlocked || (p.capacity > 0 && p.use > 0 && p.stored < CRANK_BELOW * p.capacity);
     this.powerBlocked = false;
@@ -397,14 +494,15 @@ export class World {
     return best;
   }
 
-  /** Plants grow while switched on (and, for crops with a grow lamp, while powered). */
+  /** Plants grow while switched on; a powered grow lamp speeds them up (sunberries need it). */
   private updatePlanters(): void {
     const secs = POWER_TICKS * DT;
     for (const b of this.buildings.ofKind('planter')) {
       if (!b.on || !b.planted || b.growth >= 1) continue;
       const crop = CROPS[b.crop];
-      if (crop.powerUse > 0 && !b.powered) continue;
-      b.growth = Math.min(1, b.growth + secs / crop.growSeconds);
+      const lit = b.lamp && b.powered;
+      if (crop.needsLamp && !lit) continue;
+      b.growth = Math.min(1, b.growth + (secs * (lit ? GROW_LAMP_BONUS : 1)) / crop.growSeconds);
     }
   }
 
@@ -413,7 +511,7 @@ export class World {
   /** Watts a consumer wants this second (0 = idle or off). Workstations draw only while operated. */
   powerDraw(b: Building): number {
     if (!b.on) return 0;
-    if (b.kind === 'planter') return b.planted && b.growth < 1 ? CROPS[b.crop].powerUse : 0;
+    if (b.kind === 'planter') return b.lamp && b.planted && b.growth < 1 ? GROW_LAMP_W : 0;
     const use = BUILDS[b.kind].powerUse ?? 0;
     if (use === 0 || b.kind === 'lamp') return use;
     return this.tick - b.busyTick <= POWER_TICKS ? use : 0;
@@ -500,7 +598,7 @@ export class World {
 
   /** Jobs at powered workstations are only taken when there is power for them. */
   private opPowered(o: Order): boolean {
-    if (o.task !== 'print' && o.task !== 'cook') return true;
+    if (o.task !== 'print' && o.task !== 'cook' && o.task !== 'research') return true;
     const b = this.buildings.get(o.buildingId);
     if (!b || b.powered || this.canPower(BUILDS[b.kind].powerUse ?? 0)) return true;
     this.powerBlocked = true;
@@ -949,19 +1047,22 @@ export class World {
     this.startNeed(c, NEED_TASK[p.need]);
   }
 
-  /** Nearest reachable building of a kind with a free, usable slot. */
-  private findNeedBuilding(c: Colonist, kind: BuildKind): { b: Building; slot: number } | null {
+  /** Nearest reachable building of these kinds with a free, usable slot (dirty outhouses don't count). */
+  private findNeedBuilding(c: Colonist, kinds: BuildKind[]): { b: Building; slot: number } | null {
     let best: { b: Building; slot: number } | null = null;
     let bestD = 1e9;
-    for (const b of this.buildings.ofKind(kind)) {
-      const slot = freeSlot(b);
-      if (slot < 0 || !slotUsable(this.grid, b, slot)) continue;
-      const uc = useCell(this.grid, b, slot);
-      const d = Math.abs(b.x - c.x) + Math.abs(b.y - c.y);
-      if (d >= bestD) continue;
-      if (!this.regions.canReach(c.cell, uc)) continue;
-      best = { b, slot };
-      bestD = d;
+    for (const kind of kinds) {
+      for (const b of this.buildings.ofKind(kind)) {
+        if (b.dirty) continue;
+        const slot = freeSlot(b);
+        if (slot < 0 || !slotUsable(this.grid, b, slot)) continue;
+        const uc = useCell(this.grid, b, slot);
+        const d = Math.abs(b.x - c.x) + Math.abs(b.y - c.y);
+        if (d >= bestD) continue;
+        if (!this.regions.canReach(c.cell, uc)) continue;
+        best = { b, slot };
+        bestD = d;
+      }
     }
     return best;
   }
@@ -979,8 +1080,7 @@ export class World {
       }
       return false;
     }
-    const bkind = TASK_BUILDING[kind];
-    const target = bkind ? this.findNeedBuilding(c, bkind) : null;
+    const target = this.findNeedBuilding(c, TASK_BUILDINGS[kind]);
     if (!target && (kind === 'toilet' || kind === 'sink' || kind === 'shower')) {
       c.needRetryAt = this.tick + NEED_RETRY_TICKS;
       if (kind === 'toilet' && c.needs.bladder < NEED_DEFS.bladder.urgent && this.tick % 600 < NEED_RETRY_TICKS) {
@@ -1109,12 +1209,15 @@ export class World {
     const n = c.needs;
     switch (t.kind) {
       case 'eat': n.hunger = t.raw ? Math.min(100, n.hunger + RAW_HUNGER) : 100; break;
-      case 'toilet':
+      case 'toilet': {
         n.bladder = 100;
         c.bladderHold = 0;
+        const b = this.buildings.get(t.buildingId);
+        if (b && b.kind === 'toilet' && ++b.uses >= OUTHOUSE_USES) b.dirty = true;
         if (this.buildings.ofKind('sink').size > 0) c.sinkPending = true;
         else n.hygiene = Math.max(0, n.hygiene + SKIP_SINK_HYGIENE);
         break;
+      }
       case 'sink': n.hygiene = Math.min(100, n.hygiene + SINK_HYGIENE); break;
       case 'shower': n.hygiene = 100; break;
       case 'sleep': break;
@@ -1174,7 +1277,7 @@ export class World {
     const g = this.grid;
     const homes: number[] = [];
     if (canStand(g, this.spawn.x, this.spawn.y)) homes.push(g.idx(this.spawn.x, this.spawn.y));
-    for (const kind of ['toilet', 'bed', 'printer'] as BuildKind[]) {
+    for (const kind of ['toilet', 'flushtoilet', 'bed', 'printer'] as BuildKind[]) {
       for (const b of this.buildings.ofKind(kind)) homes.push(useCell(g, b, 0));
     }
     if (!homes.length) return;
@@ -1502,6 +1605,7 @@ export class World {
     }
     o.waitingClear = false;
     o.progress += DT * speed;
+    if (o.task === 'research' && !this.addResearch(o, DT * speed)) return;
     if (o.progress >= o.work) {
       // re-check: another wall may have gone up next to us while we worked
       if (orderIsSolidBuild(o) && (this.wouldSealNeighbour(o, c) || this.wouldStrand(o))) {
@@ -1595,7 +1699,7 @@ export class World {
     const addPlace = (cell: number) => {
       if (places.length < MAX * 2 && this.regions.regionOf(cell) >= 0) places.push(cell);
     };
-    for (const kind of ['toilet', 'bed', 'printer', 'table', 'sink', 'shower'] as BuildKind[]) {
+    for (const kind of ['toilet', 'flushtoilet', 'bed', 'printer', 'table', 'sink', 'shower'] as BuildKind[]) {
       for (const b of this.buildings.ofKind(kind)) {
         if (Math.abs(b.x - o.x) <= R * 2 && Math.abs(b.y - o.y) <= R * 2) addPlace(useCell(g, b, 0));
       }
@@ -1745,6 +1849,9 @@ export class World {
           this.resources[b.crop] += CROPS[b.crop].yield;
           b.planted = false;
           b.growth = 0;
+        } else if (o.task === 'clean') {
+          b.uses = 0;
+          b.dirty = false;
         }
         if (this.opOrders.get(b.id) === o) this.opOrders.delete(b.id);
         break;

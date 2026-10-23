@@ -153,6 +153,8 @@ const OPERATE_LABEL: Record<OperateTask, string> = {
   sow: 'Sowing',
   harvest: 'Harvesting',
   crank: 'Cranking the generator',
+  research: 'Researching',
+  clean: 'Cleaning the outhouse',
 };
 
 export const NEED_TASK_LABEL: Record<NeedTaskKind, string> = {

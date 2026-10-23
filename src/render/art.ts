@@ -92,6 +92,30 @@ export function drawBuilding(
       break;
     }
     case 'toilet': {
+      // outhouse: plank booth with a crescent moon, a bucket seat inside the open side
+      ctx.fillStyle = col(P.woodDark);
+      ctx.fillRect(x + 0.05, y + 0.1, 0.9, 0.12); // roof
+      ctx.fillRect(x + 0.1, y + 0.2, 0.1, 1.8);
+      ctx.fillRect(x + 0.8, y + 0.2, 0.1, 1.8);
+      ctx.fillStyle = col(P.wood);
+      for (let k = 0; k < 3; k++) ctx.fillRect(x + 0.62, y + 0.25 + k * 0.58, 0.18, 0.52); // back planks
+      ctx.fillStyle = col(P.woodLight);
+      ctx.fillRect(x + 0.2, y + 1.45, 0.42, 0.12); // seat
+      ctx.fillStyle = col(P.woodDark);
+      ctx.fillRect(x + 0.26, y + 1.57, 0.3, 0.43);
+      if (!tint) {
+        ctx.fillStyle = '#ffd166';
+        ctx.beginPath();
+        ctx.arc(x + 0.71, y + 0.55, 0.08, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = P.wood;
+        ctx.beginPath();
+        ctx.arc(x + 0.75, y + 0.53, 0.07, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
+    case 'flushtoilet': {
       // tank on the wall (back = right), bowl, seat
       ctx.fillStyle = col(P.porcelainShade);
       rr(ctx, x + 0.55, y + 0.55, 0.32, 0.65, 0.06);
@@ -104,6 +128,63 @@ export function drawBuilding(
       ctx.fillRect(x + 0.6, y + 0.68, 0.14, 0.04); // flush handle
       ctx.fillStyle = col(P.porcelainShade);
       ctx.fillRect(x + 0.12, y + 1.22, 0.7, 0.05);
+      if (!tint) {
+        ctx.fillStyle = P.water; // self-cleaning nozzle light
+        ctx.fillRect(x + 0.64, y + 0.82, 0.08, 0.08);
+      }
+      break;
+    }
+    case 'research':
+    case 'advresearch': {
+      // desk with a microscope (basic) or a console with twin screens (advanced)
+      const adv = kind === 'advresearch';
+      ctx.fillStyle = col(adv ? P.metalDark : P.woodDark);
+      ctx.fillRect(x + 0.1, y + 1.05, w - 0.2, 0.12); // desk top
+      ctx.fillRect(x + 0.18, y + 1.17, 0.12, 0.83);
+      ctx.fillRect(x + w - 0.3, y + 1.17, 0.12, 0.83);
+      ctx.fillStyle = col(adv ? P.metal : P.wood);
+      ctx.fillRect(x + 0.1, y + 1.05, w - 0.2, 0.04);
+      if (adv) {
+        ctx.fillStyle = col(P.metalDark);
+        rr(ctx, x + 0.15, y + 0.2, 0.75, 0.6, 0.05);
+        rr(ctx, x + 1.05, y + 0.2, 0.75, 0.6, 0.05);
+        ctx.fill();
+        ctx.fillRect(x + 0.45, y + 0.8, 0.12, 0.25);
+        ctx.fillRect(x + 1.35, y + 0.8, 0.12, 0.25);
+        if (!tint) {
+          ctx.fillStyle = '#c77dff';
+          ctx.fillRect(x + 0.22, y + 0.27, 0.61, 0.46);
+          ctx.fillStyle = P.screen;
+          ctx.fillRect(x + 1.12, y + 0.27, 0.61, 0.46);
+          ctx.fillStyle = 'rgba(255,255,255,0.5)';
+          for (let k = 0; k < 3; k++) ctx.fillRect(x + 1.18, y + 0.34 + k * 0.12, 0.3 + (k % 2) * 0.15, 0.04);
+        }
+      } else {
+        // microscope on the left, notes and a flask on the right
+        ctx.fillStyle = col(P.metalDark);
+        ctx.fillRect(x + 0.35, y + 0.95, 0.4, 0.1);
+        ctx.fillRect(x + 0.5, y + 0.45, 0.1, 0.5);
+        ctx.save();
+        ctx.translate(x + 0.55, y + 0.5);
+        ctx.rotate(-0.4);
+        ctx.fillStyle = col(P.metal);
+        ctx.fillRect(-0.06, -0.3, 0.12, 0.4);
+        ctx.restore();
+        ctx.fillStyle = col(P.pillow);
+        ctx.fillRect(x + 0.9, y + 0.98, 0.4, 0.07);
+        ctx.fillStyle = col(P.glass);
+        ctx.beginPath();
+        ctx.moveTo(x + 1.5, y + 0.6);
+        ctx.lineTo(x + 1.6, y + 0.6);
+        ctx.lineTo(x + 1.72, y + 1.05);
+        ctx.lineTo(x + 1.38, y + 1.05);
+        ctx.closePath();
+        ctx.fill();
+        if (!tint) {
+          ctx.fillStyle = P.rad;
+          ctx.fillRect(x + 1.42, y + 0.88, 0.26, 0.16);
+        }
+      }
       break;
     }
     case 'sink': {
@@ -370,25 +451,28 @@ export function drawBuilding(
   ctx.restore();
 }
 
+/** The grow lamp bar over a planter whose top-left is (x,y); pink glow when powered. */
+export function drawGrowLamp(ctx: CanvasRenderingContext2D, x: number, y: number, on: boolean): void {
+  ctx.fillStyle = PALETTE.metalDark;
+  ctx.fillRect(x + 0.1, y + 0.05, 0.8, 0.08);
+  ctx.fillRect(x + 0.08, y + 0.05, 0.05, 0.4);
+  ctx.fillStyle = on ? '#ff9ef5' : '#6a5a68';
+  ctx.fillRect(x + 0.15, y + 0.13, 0.7, 0.05);
+  if (on) {
+    ctx.fillStyle = 'rgba(255,158,245,0.10)';
+    ctx.fillRect(x + 0.1, y + 0.18, 0.8, 1.26);
+  }
+}
+
 /**
  * A planter's plant, from sprout (growth 0) to ripe (1), standing on the soil of the planter
- * whose top-left is (x,y). Sunberries hang under a grow lamp (lit when `lampOn`).
+ * whose top-left is (x,y).
  */
-export function drawPlant(ctx: CanvasRenderingContext2D, crop: CropId, x: number, y: number, growth: number, lampOn: boolean): void {
+export function drawPlant(ctx: CanvasRenderingContext2D, crop: CropId, x: number, y: number, growth: number): void {
   const P = PALETTE;
   const g = Math.max(0, Math.min(1, growth));
   const ripe = g >= 1;
   const base = y + 1.45;
-  if (crop === 'sunberry') {
-    ctx.fillStyle = P.metalDark;
-    ctx.fillRect(x + 0.1, y + 0.05, 0.8, 0.08);
-    ctx.fillStyle = lampOn ? '#ff9ef5' : '#6a5a68';
-    ctx.fillRect(x + 0.15, y + 0.13, 0.7, 0.05);
-    if (lampOn) {
-      ctx.fillStyle = 'rgba(255,158,245,0.10)';
-      ctx.fillRect(x + 0.1, y + 0.18, 0.8, 1.26);
-    }
-  }
   if (crop === 'mushroom') {
     const n = 1 + Math.round(g * 2);
     for (let k = 0; k < n; k++) {
@@ -466,7 +550,7 @@ export function buildIcon(kind: BuildKind, w: number, h: number): string {
     // show machines running / charged / lit
     const anim = kind === 'door' ? 0 : kind === 'crank' ? 0.6 : kind === 'battery' ? 0.7 : 1;
     drawBuilding(ctx, kind, 0, 0, w, h, false, anim);
-    if (kind === 'planter') drawPlant(ctx, 'tuber', 0, 0, 0.8, false);
+    if (kind === 'planter') drawPlant(ctx, 'tuber', 0, 0, 0.8);
   }
   return c.toDataURL();
 }

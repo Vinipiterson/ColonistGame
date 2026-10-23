@@ -47,6 +47,9 @@ const pick = async (kind) => {
 await page.evaluate(() => {
   const { world, renderer } = window.__colony;
   world.resources.matter = 3000;
+  // the shower and battery need research (driven through the UI in farm.mjs)
+  world.completeResearch('showers');
+  world.completeResearch('batteries');
   renderer.cam.zoom = 30;
 });
 await page.waitForTimeout(200);

@@ -58,8 +58,8 @@ window.addEventListener('resize', resize);
 resize();
 requestAnimationFrame(frame);
 hud.log(`Seed ${seed}. Three colonists have arrived.`);
-hud.log(`Build a Toilet soon, then Beds, a Manual Generator and a Ration Printer: meals run out in a few days.`);
-hud.log(`Planters grow crops; a Cooking Station turns them into meals. Click a building to configure it.`);
+hud.log(`Build an Outhouse soon, then Beds, a Manual Generator and a Ration Printer: meals run out in a few days.`);
+hud.log(`A Research Station unlocks farming, batteries, lighting and more (press T to pick a project).`);
 
 // Debug / test hook (used by the Playwright e2e script).
 (window as unknown as Record<string, unknown>).__colony = { world, renderer, tools, hud, input };

@@ -13,7 +13,7 @@ import type { Rect } from '../sim/grid';
 import { orderCost, type Order } from '../sim/orders';
 import { hash2 } from '../sim/rng';
 import type { World } from '../sim/world';
-import { ANIMATED, drawBuilding, drawLadder, drawPlant, drawStairBlock } from './art';
+import { ANIMATED, drawBuilding, drawGrowLamp, drawLadder, drawPlant, drawStairBlock } from './art';
 
 const CHUNK_TILES = 32;
 const TEX = 16; // bitmap pixels per tile inside chunk caches
@@ -359,10 +359,24 @@ export class Renderer {
         grad.addColorStop(1, 'rgba(255,220,150,0)');
         ctx.fillStyle = grad;
         ctx.fillRect(b.x - 0.4, b.y - 0.3, 1.8, 1.8);
-      } else if (b.kind === 'planter' && b.planted) {
-        drawPlant(ctx, b.crop, b.x, b.y, b.growth, b.powered);
-      }
+      } else if (b.kind === 'planter') {
+        if (b.lamp) drawGrowLamp(ctx, b.x, b.y, b.powered);
+        if (b.planted) drawPlant(ctx, b.crop, b.x, b.y, b.growth);
+      } else if (b.kind === 'toilet' && b.dirty) this.drawDirty(b.x, b.y, time);
       if (b.on && !b.powered && w.powerDraw(b) > 0) this.drawNoPower(b.x + b.w - 0.25, b.y + 0.25, time);
+    }
+  }
+
+  /** A dirty outhouse: grime and a couple of buzzing flies. */
+  private drawDirty(x: number, y: number, time: number): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = 'rgba(92,70,30,0.55)';
+    ctx.fillRect(x + 0.2, y + 1.4, 0.42, 0.2);
+    ctx.fillRect(x + 0.3, y + 1.85, 0.25, 0.15);
+    ctx.fillStyle = '#1b1b1b';
+    for (let k = 0; k < 2; k++) {
+      const a = time * (5 + k * 2) + k * 2;
+      ctx.fillRect(x + 0.45 + Math.cos(a) * 0.25, y + 0.95 + Math.sin(a * 1.3) * 0.18, 0.06, 0.06);
     }
   }
 

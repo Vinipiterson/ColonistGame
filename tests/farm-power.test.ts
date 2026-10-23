@@ -9,9 +9,12 @@ import { cell, runUntil, worldFromAscii } from './helpers';
 const R = (x0: number, y0: number, x1 = x0, y1 = y0) => ({ x0, y0, x1, y1 });
 const SEC = TICK_HZ;
 
-/** Room 20 wide, 4 tall (rows 1..4, floor at y=5), optionally with a colonist at (2,4). */
+/**
+ * Room 20 wide, 4 tall (rows 1..4, floor at y=5), optionally with a colonist at (2,4).
+ * Everything is researched (research itself is tested in research.test.ts).
+ */
 function room(colonist = true): World {
-  return worldFromAscii([
+  const w = worldFromAscii([
     'BBBBBBBBBBBBBBBBBBBBBB',
     'B....................B',
     'B....................B',
@@ -19,6 +22,8 @@ function room(colonist = true): World {
     colonist ? 'B.@..................B' : 'B....................B',
     'BBBBBBBBBBBBBBBBBBBBBB',
   ]);
+  w.unlockAll();
+  return w;
 }
 
 /** Step n ticks keeping every colonist's needs topped up (long farm tests have no toilets). */
@@ -36,7 +41,8 @@ describe('planters and crops', () => {
     const w = room();
     w.resources.matter = 100;
     const p = w.buildings.add('planter', 6, 3, false);
-    expect(p.crop).toBe('tuber');
+    expect(p.crop).toBe('mushroom');
+    w.issue({ type: 'configure', buildingId: p.id, crop: 'tuber' });
     runFed(w, 30 * SEC, () => p.planted);
     expect(p.planted).toBe(true);
     expect(w.resources.matter).toBe(80);
@@ -54,8 +60,8 @@ describe('planters and crops', () => {
     const berry = w.buildings.add('planter', 3, 3, false);
     const mush = w.buildings.add('planter', 4, 3, false);
     w.issue({ type: 'configure', buildingId: berry.id, crop: 'sunberry' });
-    w.issue({ type: 'configure', buildingId: mush.id, crop: 'mushroom' });
     w.step();
+    expect(berry.lamp).toBe(true); // sunberries switch the grow lamp on
     berry.planted = mush.planted = true;
     w.run(60 * SEC);
     expect(berry.growth).toBe(0);
@@ -75,7 +81,7 @@ describe('planters and crops', () => {
     const p = w.buildings.add('planter', 6, 3, false);
     p.planted = true;
     p.growth = 0.5;
-    w.issue({ type: 'configure', buildingId: p.id, crop: 'mushroom' });
+    w.issue({ type: 'configure', buildingId: p.id, crop: 'tuber' });
     w.step();
     expect(p.planted).toBe(false);
     expect(p.growth).toBe(0);
@@ -85,7 +91,7 @@ describe('planters and crops', () => {
     expect([...w.orders.all()].some((o) => o.buildingId === p.id)).toBe(false);
     w.issue({ type: 'configure', buildingId: p.id, on: true });
     runFed(w, 30 * SEC, () => p.planted);
-    expect(p.planted).toBe(true); // mushrooms: free seed
+    expect(p.planted).toBe(true);
   });
 });
 
@@ -188,6 +194,7 @@ describe('power', () => {
     for (let i = 0; i < 14; i++) {
       const p = w.buildings.add('planter', 2 + i, 3, false);
       p.crop = 'sunberry';
+      p.lamp = true;
       p.planted = true;
       planters.push(p);
     }
