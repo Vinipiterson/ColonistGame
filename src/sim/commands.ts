@@ -2,14 +2,16 @@
 // directly; commands are queued and applied at the start of the next tick. This keeps the sim
 // deterministic and replayable (tests drive the game with the same commands the UI sends).
 
-import type { BuildKind } from './defs';
+import type { BuildKind, CropId } from './defs';
 import type { Rect } from './grid';
 
 export type Command =
   | { type: 'dig'; rect: Rect; priority: number }
   | { type: 'build'; rect: Rect; kind: BuildKind; priority: number; flip?: boolean }
   | { type: 'deconstruct'; rect: Rect; priority: number }
-  | { type: 'cancel'; rect: Rect };
+  | { type: 'cancel'; rect: Rect }
+  /** Building inspector: switch it on/off, choose a planter's crop (uproots the current plant). */
+  | { type: 'configure'; buildingId: number; on?: boolean; crop?: CropId };
 
 export type SimEvent =
   | { type: 'death'; colonistId: number; name: string; cause: string }

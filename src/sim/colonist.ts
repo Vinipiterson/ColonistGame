@@ -2,8 +2,8 @@
 // Plain objects on purpose: at hundreds of colonists the cost is in pathing / job search,
 // not in property access, and objects keep the AI readable.
 
-import { MAX_HEALTH, type NeedId } from './defs';
-import type { Order } from './orders';
+import { MAX_HEALTH, type CropId, type NeedId } from './defs';
+import type { OperateTask, Order } from './orders';
 import type { Path, PathRequest } from './pathfinder';
 
 export type ColonistState =
@@ -20,6 +20,8 @@ export interface NeedTask {
   slot: number;
   /** Seconds spent using it so far. */
   timer: number;
+  /** Eating: no meals, so a raw portion of this crop (null = a meal). */
+  raw: CropId | null;
 }
 
 export const NAMES = [
@@ -128,6 +130,7 @@ export class Colonist {
         const t = this.needTask;
         if (!t) return 'Busy';
         if (t.kind === 'sleep' && t.buildingId < 0) return 'Napping on the floor';
+        if (t.kind === 'eat' && t.raw) return 'Eating raw crops';
         if (t.kind === 'eat' && t.buildingId < 0) return 'Eating standing up';
         return NEED_TASK_LABEL[t.kind];
       }
@@ -139,10 +142,18 @@ export class Colonist {
     if (!j) return 'Work';
     if (j.kind === 'dig') return 'Digging';
     if (j.kind === 'build') return `Building ${j.build}`;
-    if (j.kind === 'operate') return 'Printing rations';
+    if (j.kind === 'operate') return OPERATE_LABEL[j.task ?? 'print'];
     return 'Deconstructing';
   }
 }
+
+const OPERATE_LABEL: Record<OperateTask, string> = {
+  print: 'Printing rations',
+  cook: 'Cooking',
+  sow: 'Sowing',
+  harvest: 'Harvesting',
+  crank: 'Cranking the generator',
+};
 
 export const NEED_TASK_LABEL: Record<NeedTaskKind, string> = {
   eat: 'Eating',

@@ -1,7 +1,7 @@
 // Vector art for structures and buildings, drawn in tile units (1 unit = 1 tile).
 // Shared by the world renderer (chunk cache, ghosts, doors) and the build bar icons.
 
-import type { BuildKind } from '../sim/defs';
+import type { BuildKind, CropId } from '../sim/defs';
 
 export const PALETTE = {
   wood: '#8a5a32', woodDark: '#5e3b1f', woodLight: '#b07d45',
@@ -11,7 +11,11 @@ export const PALETTE = {
   glass: 'rgba(170,220,255,0.35)', water: '#6ec6ff',
   screen: '#7cfc9a', screenDark: '#1f3a2a',
   concrete: '#bdb8b0', concreteLine: '#8f8b85', concreteHi: '#dcd8d1',
+  soil: '#3d2a1c', leaf: '#5fae4a', leafDark: '#3e7d33', ember: '#ff8a3d', glow: '#ffd27a', rad: '#7dff5a',
 };
+
+/** Buildings drawn every frame (they animate) instead of into the cached chunk bitmaps. */
+export const ANIMATED: ReadonlySet<BuildKind> = new Set<BuildKind>(['door', 'crank', 'coalgen', 'battery', 'reactor']);
 
 /** Minecraft-style stair block: bottom half full, top half on the high side. */
 export function drawStairBlock(ctx: CanvasRenderingContext2D, x: number, y: number, risesRight: boolean, tint?: string): void {
@@ -52,13 +56,16 @@ function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: n
 }
 
 /**
- * Draw a building with top-left (x,y). `flip` mirrors it. For doors, `open` in [0,1].
+ * Draw a building with top-left (x,y). `flip` mirrors it. `anim` animates some kinds: door
+ * openness 0..1, manual generator wheel angle (radians), battery charge 0..1, fuel generator /
+ * reactor running (> 0, also the flicker phase), lamp lit (1).
  * `tint` draws a flat silhouette in that colour (for blueprint ghosts).
  */
 export function drawBuilding(
   ctx: CanvasRenderingContext2D, kind: BuildKind, x: number, y: number, w: number, h: number,
-  flip: boolean, open = 0, tint?: string,
+  flip: boolean, anim = 0, tint?: string,
 ): void {
+  const open = anim;
   ctx.save();
   if (flip) {
     ctx.translate(x * 2 + w, 0);
@@ -193,12 +200,245 @@ export function drawBuilding(
       }
       break;
     }
+    case 'planter': {
+      // wooden box with soil in the bottom cell; the plant is drawn on top (drawPlant)
+      ctx.fillStyle = col(P.woodDark);
+      ctx.fillRect(x + 0.06, y + 1.5, 0.88, 0.5);
+      ctx.fillStyle = col(P.wood);
+      ctx.fillRect(x + 0.1, y + 1.55, 0.8, 0.4);
+      ctx.fillStyle = col(P.woodLight);
+      ctx.fillRect(x + 0.06, y + 1.5, 0.88, 0.06);
+      ctx.fillStyle = col(P.soil);
+      ctx.fillRect(x + 0.12, y + 1.44, 0.76, 0.08);
+      break;
+    }
+    case 'stove': {
+      // counter with an oven door, a hob and a pot
+      ctx.fillStyle = col(P.metalDark);
+      rr(ctx, x + 0.08, y + 0.85, w - 0.16, h - 0.85, 0.06);
+      ctx.fill();
+      ctx.fillStyle = col(P.metal);
+      ctx.fillRect(x + 0.08, y + 0.82, w - 0.16, 0.1);
+      ctx.fillStyle = col('#2b2a2e');
+      rr(ctx, x + 0.25, y + 1.1, 0.9, 0.6, 0.05);
+      ctx.fill();
+      ctx.fillStyle = col(P.metalLight);
+      ctx.fillRect(x + 0.3, y + 1.15, 0.8, 0.05); // oven handle
+      ctx.fillStyle = col(P.screenDark);
+      ctx.fillRect(x + w - 0.6, y + 1.15, 0.35, 0.22); // control panel (operator side)
+      if (!tint) {
+        ctx.fillStyle = P.ember;
+        ctx.fillRect(x + w - 0.55, y + 1.22, 0.1, 0.05);
+      }
+      ctx.fillStyle = col('#4a4f55'); // pot
+      rr(ctx, x + 0.35, y + 0.42, 0.6, 0.4, 0.06);
+      ctx.fill();
+      ctx.fillRect(x + 0.28, y + 0.42, 0.74, 0.06);
+      break;
+    }
+    case 'crank': {
+      // treadle base and a big wheel with a handle; anim = wheel angle
+      ctx.fillStyle = col(P.woodDark);
+      ctx.fillRect(x + 0.1, y + 1.75, w - 0.2, 0.25);
+      ctx.fillRect(x + 0.55, y + 0.95, 0.12, 0.85);
+      ctx.fillStyle = col(P.metalDark);
+      rr(ctx, x + w - 0.75, y + 1.1, 0.6, 0.65, 0.06); // dynamo
+      ctx.fill();
+      if (!tint) {
+        ctx.fillStyle = anim ? P.glow : '#6b5d3a';
+        ctx.fillRect(x + w - 0.55, y + 1.25, 0.2, 0.08);
+      }
+      const cx = x + 0.61, cy = y + 0.9, r = 0.55;
+      ctx.strokeStyle = col(P.wood);
+      ctx.lineWidth = 0.08;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 0.05;
+      ctx.beginPath();
+      for (let k = 0; k < 4; k++) {
+        const a = anim + (k * Math.PI) / 2;
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+      }
+      ctx.stroke();
+      ctx.fillStyle = col(P.metalLight);
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(anim) * r, cy + Math.sin(anim) * r, 0.08, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case 'coalgen': {
+      // furnace box with a fire window (glows while running) and a chimney
+      ctx.fillStyle = col(P.metalDark);
+      ctx.fillRect(x + 0.2, y, 0.25, 0.5); // chimney
+      rr(ctx, x + 0.08, y + 0.45, w - 0.16, h - 0.45, 0.08);
+      ctx.fill();
+      ctx.fillStyle = col(P.metal);
+      ctx.fillRect(x + 0.08, y + 0.45, w - 0.16, 0.08);
+      ctx.fillStyle = col('#1e1b1a');
+      rr(ctx, x + 0.3, y + 0.9, 0.8, 0.6, 0.06);
+      ctx.fill();
+      if (!tint && anim > 0) {
+        const f = 0.75 + 0.25 * Math.sin(anim * 9);
+        ctx.fillStyle = `rgba(255,138,61,${f})`;
+        rr(ctx, x + 0.36, y + 1.1, 0.68, 0.36, 0.05);
+        ctx.fill();
+        ctx.fillStyle = P.glow;
+        ctx.fillRect(x + 0.5, y + 1.25, 0.4, 0.08);
+      }
+      ctx.fillStyle = col(P.woodDark); // coal hopper
+      ctx.fillRect(x + w - 0.65, y + 0.7, 0.45, 0.3);
+      ctx.fillStyle = col('#191716');
+      ctx.fillRect(x + w - 0.6, y + 0.66, 0.35, 0.1);
+      break;
+    }
+    case 'battery': {
+      // casing with terminals and a charge gauge (anim = charge 0..1)
+      ctx.fillStyle = col(P.metalDark);
+      ctx.fillRect(x + 0.3, y + 0.12, 0.12, 0.1);
+      ctx.fillRect(x + 0.58, y + 0.12, 0.12, 0.1);
+      rr(ctx, x + 0.15, y + 0.2, 0.7, h - 0.2, 0.08);
+      ctx.fill();
+      ctx.fillStyle = col('#1e2a22');
+      ctx.fillRect(x + 0.3, y + 0.4, 0.4, h - 0.6);
+      if (!tint) {
+        const ch = Math.max(0, Math.min(1, anim));
+        const full = h - 0.64;
+        ctx.fillStyle = ch > 0.25 ? P.screen : P.ember;
+        ctx.fillRect(x + 0.32, y + 0.42 + full * (1 - ch), 0.36, full * ch);
+      }
+      break;
+    }
+    case 'reactor': {
+      // rounded containment vessel with a core window (green glow while running) and pipes
+      ctx.fillStyle = col(P.metalDark);
+      ctx.fillRect(x + 0.1, y + h - 0.3, w - 0.2, 0.3);
+      ctx.fillStyle = col(P.metal);
+      rr(ctx, x + 0.35, y + 0.15, w - 0.7, h - 0.4, 0.6);
+      ctx.fill();
+      ctx.fillStyle = col(P.metalLight);
+      ctx.fillRect(x + 0.6, y + 0.25, w - 1.2, 0.08);
+      ctx.fillStyle = col('#16201a');
+      rr(ctx, x + 0.95, y + 0.85, w - 1.9, 1.1, 0.25);
+      ctx.fill();
+      if (!tint && anim > 0) {
+        const f = 0.7 + 0.3 * Math.sin(anim * 4);
+        ctx.fillStyle = `rgba(125,255,90,${f})`;
+        rr(ctx, x + 1.05, y + 0.95, w - 2.1, 0.9, 0.2);
+        ctx.fill();
+      }
+      ctx.fillStyle = col(P.metalDark);
+      ctx.fillRect(x + 0.05, y + 1.2, 0.35, 0.15);
+      ctx.fillRect(x + w - 0.4, y + 1.6, 0.35, 0.15);
+      // trefoil-ish warning dots
+      if (!tint) {
+        ctx.fillStyle = '#ffd166';
+        for (let k = 0; k < 3; k++) {
+          const a = (k * Math.PI * 2) / 3 - Math.PI / 2;
+          ctx.beginPath();
+          ctx.arc(x + w / 2 + Math.cos(a) * 0.14, y + 2.3 + Math.sin(a) * 0.14, 0.07, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      break;
+    }
+    case 'lamp': {
+      // ceiling mount, rod and shade; bulb lit when anim = 1
+      ctx.fillStyle = col(P.metalDark);
+      ctx.fillRect(x + 0.3, y, 0.4, 0.06);
+      ctx.fillRect(x + 0.47, y, 0.06, 0.3);
+      ctx.fillStyle = col(P.metal);
+      ctx.beginPath();
+      ctx.moveTo(x + 0.2, y + 0.55);
+      ctx.lineTo(x + 0.35, y + 0.3);
+      ctx.lineTo(x + 0.65, y + 0.3);
+      ctx.lineTo(x + 0.8, y + 0.55);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = col(anim ? P.glow : '#8a826f');
+      ctx.beginPath();
+      ctx.arc(x + 0.5, y + 0.57, 0.11, 0, Math.PI);
+      ctx.fill();
+      break;
+    }
     case 'wall':
     case 'ladder':
     case 'stairs':
       break;
   }
   ctx.restore();
+}
+
+/**
+ * A planter's plant, from sprout (growth 0) to ripe (1), standing on the soil of the planter
+ * whose top-left is (x,y). Sunberries hang under a grow lamp (lit when `lampOn`).
+ */
+export function drawPlant(ctx: CanvasRenderingContext2D, crop: CropId, x: number, y: number, growth: number, lampOn: boolean): void {
+  const P = PALETTE;
+  const g = Math.max(0, Math.min(1, growth));
+  const ripe = g >= 1;
+  const base = y + 1.45;
+  if (crop === 'sunberry') {
+    ctx.fillStyle = P.metalDark;
+    ctx.fillRect(x + 0.1, y + 0.05, 0.8, 0.08);
+    ctx.fillStyle = lampOn ? '#ff9ef5' : '#6a5a68';
+    ctx.fillRect(x + 0.15, y + 0.13, 0.7, 0.05);
+    if (lampOn) {
+      ctx.fillStyle = 'rgba(255,158,245,0.10)';
+      ctx.fillRect(x + 0.1, y + 0.18, 0.8, 1.26);
+    }
+  }
+  if (crop === 'mushroom') {
+    const n = 1 + Math.round(g * 2);
+    for (let k = 0; k < n; k++) {
+      const cx = x + 0.3 + k * 0.2, s = 0.08 + g * 0.12 - k * 0.02;
+      const stem = 0.08 + g * 0.3 - k * 0.05;
+      ctx.fillStyle = '#e8dcc8';
+      ctx.fillRect(cx - 0.03, base - stem, 0.06, stem);
+      ctx.fillStyle = ripe ? '#c0503a' : '#a77b5a';
+      ctx.beginPath();
+      ctx.ellipse(cx, base - stem, s * 1.3, s, 0, Math.PI, 0);
+      ctx.fill();
+      if (ripe) {
+        ctx.fillStyle = '#f4eee2';
+        ctx.fillRect(cx - s * 0.5, base - stem - s * 0.6, 0.04, 0.04);
+      }
+    }
+    return;
+  }
+  const hgt = 0.2 + g * (crop === 'sunberry' ? 1.0 : 0.75);
+  // stem + leaves alternating up the stem
+  ctx.strokeStyle = P.leafDark;
+  ctx.lineWidth = 0.05;
+  ctx.beginPath();
+  ctx.moveTo(x + 0.5, base);
+  ctx.lineTo(x + 0.5, base - hgt);
+  ctx.stroke();
+  const leaves = 1 + Math.floor(g * 4);
+  for (let k = 0; k < leaves; k++) {
+    const ly = base - 0.1 - (k / Math.max(1, leaves)) * hgt;
+    const side = k % 2 ? -1 : 1;
+    ctx.fillStyle = k % 2 ? P.leaf : P.leafDark;
+    ctx.beginPath();
+    ctx.ellipse(x + 0.5 + side * 0.14, ly, 0.15, 0.06, side * -0.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (!ripe) return;
+  if (crop === 'tuber') {
+    ctx.fillStyle = '#b5835a';
+    ctx.beginPath();
+    ctx.ellipse(x + 0.35, base - 0.02, 0.12, 0.08, 0, 0, Math.PI * 2);
+    ctx.ellipse(x + 0.62, base - 0.01, 0.1, 0.07, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = '#ff7a4d';
+    for (let k = 0; k < 4; k++) {
+      ctx.beginPath();
+      ctx.arc(x + 0.3 + (k % 2) * 0.38, base - hgt * (0.35 + k * 0.15), 0.07, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 }
 
 /** Small icon for the build bar (drawn into a fresh canvas, returned as a data URL). */
@@ -222,6 +462,11 @@ export function buildIcon(kind: BuildKind, w: number, h: number): string {
     ctx.fillRect(0, 0, 1, 0.06);
   } else if (kind === 'ladder') drawLadder(ctx, 0, 0);
   else if (kind === 'stairs') drawStairBlock(ctx, 0, 0, true);
-  else drawBuilding(ctx, kind, 0, 0, w, h, false, 0);
+  else {
+    // show machines running / charged / lit
+    const anim = kind === 'door' ? 0 : kind === 'crank' ? 0.6 : kind === 'battery' ? 0.7 : 1;
+    drawBuilding(ctx, kind, 0, 0, w, h, false, anim);
+    if (kind === 'planter') drawPlant(ctx, 'tuber', 0, 0, 0.8, false);
+  }
   return c.toDataURL();
 }

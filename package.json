@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build && node scripts/to-artifact.mjs",
     "test": "vitest run",
     "bench": "vitest run tests/bench.test.ts",
-    "e2e": "node e2e/play.mjs && node e2e/furnish.mjs"
+    "e2e": "node e2e/play.mjs && node e2e/furnish.mjs && node e2e/farm.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.48.2",

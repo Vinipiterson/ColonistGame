@@ -1,7 +1,7 @@
 // Mouse + keyboard. Turns gestures into sim Commands and camera moves.
 //   Left drag (tool mode)  -> rectangle command (Dig / Build / Deconstruct / Cancel)
 //                             buildings: click places one, drag tiles copies side by side
-//   Left click (no tool)   -> select colonist; left drag (no tool) -> pan
+//   Left click (no tool)   -> select colonist (else building); left drag (no tool) -> pan
 //   Right click            -> leave the current tool (or cancel an in-progress drag)
 //   Right / middle drag    -> pan          Wheel or +/- -> zoom
 //   WASD / arrows pan, G/B/X/C tools, R flip/rotate, Esc, 1-9 priority, 0 emergency, Space pause
@@ -64,6 +64,7 @@ export class Input {
   private pan: { sx: number; sy: number; cx: number; cy: number; moved: boolean; button: number } | null = null;
   private keys = new Set<string>();
   onSelect: (id: number) => void = () => {};
+  onSelectBuilding: (id: number) => void = () => {};
 
   constructor(world: World, renderer: Renderer, tools: ToolState) {
     this.world = world;
@@ -149,7 +150,11 @@ export class Input {
         const rect = this.r.canvas.getBoundingClientRect();
         const ft = this.r.screenToTile(e.clientX - rect.left, e.clientY - rect.top);
         const c = this.r.colonistAt(ft.x, ft.y);
+        const g = this.world.grid;
+        const tx = Math.floor(ft.x), ty = Math.floor(ft.y);
+        const b = !c && g.inBounds(tx, ty) ? this.world.buildings.at(g.idx(tx, ty)) : undefined;
         this.onSelect(c ? c.id : -1);
+        this.onSelectBuilding(b ? b.id : -1);
       }
       this.pan = null;
     }

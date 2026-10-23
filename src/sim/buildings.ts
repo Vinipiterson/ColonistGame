@@ -3,7 +3,7 @@
 // walk through them, as in ONI. Each building has `slots` use cells along its bottom row
 // (where a colonist stands to use it) and per-slot reservations.
 
-import { BUILDS, type BuildKind } from './defs';
+import { BUILDS, DEFAULT_CROP, type BuildKind, type CropId } from './defs';
 import type { Grid } from './grid';
 import { canStand } from './nav';
 
@@ -19,6 +19,20 @@ export interface Building {
   /** Colonist id using/heading to each slot, or -1. */
   users: number[];
   removed: boolean;
+  /** Player switch (inspector). Off: no power draw, no generation, no automatic jobs. */
+  on: boolean;
+  /** Consumers: got power in the last power update. Generators: ran in the last update. */
+  powered: boolean;
+  /** Battery charge in joules. */
+  charge: number;
+  /** Planter: chosen crop, whether a plant is in, and its growth 0..1 (1 = ripe). */
+  crop: CropId;
+  planted: boolean;
+  growth: number;
+  /** Last tick a colonist worked at it (powered workstations draw power only while busy). */
+  busyTick: number;
+  /** Manual generator: ticks cranked since the last power update. */
+  crankTicks: number;
 }
 
 export class BuildingStore {
@@ -58,6 +72,7 @@ export class BuildingStore {
     const b: Building = {
       id: this.nextId++, kind, x, y, w: d.w, h: d.h, flip,
       users: new Array(Math.max(1, d.slots)).fill(-1), removed: false,
+      on: true, powered: false, charge: 0, crop: DEFAULT_CROP, planted: false, growth: 0, busyTick: -1000, crankTicks: 0,
     };
     this.byId.set(b.id, b);
     this.ofKind(kind).add(b);
@@ -88,7 +103,7 @@ export function useCell(g: Grid, b: Building, slot: number): number {
     const x = b.flip ? b.x + b.w - 1 : b.x;
     return bottom * g.w + x;
   }
-  if (b.kind === 'printer') {
+  if (b.kind === 'printer' || b.kind === 'stove' || b.kind === 'crank') {
     // operator stands at the control side
     const x = b.flip ? b.x : b.x + b.w - 1;
     return bottom * g.w + x;
@@ -109,7 +124,7 @@ export function freeSlot(b: Building): number {
 /**
  * Placement rules for a building footprint with top-left (x,y):
  * in bounds, every cell empty (not solid, no ladder, no other building, no order),
- * and solid floor under the whole bottom row.
+ * and solid floor under the whole bottom row (ceiling mounts: solid tiles above the top row).
  * `ignoreOrders` lets the caller skip the order check (e.g. for previews of replacements).
  */
 export function canPlaceBuilding(g: Grid, kind: BuildKind, x: number, y: number, ignoreOrders = false): boolean {
@@ -122,7 +137,8 @@ export function canPlaceBuilding(g: Grid, kind: BuildKind, x: number, y: number,
       if (!ignoreOrders && g.order[i] >= 0) return false;
     }
   }
-  for (let xx = x; xx < x + d.w; xx++) if (!g.solid(xx, y + d.h)) return false;
+  const supportY = d.mount === 'ceiling' ? y - 1 : y + d.h;
+  for (let xx = x; xx < x + d.w; xx++) if (!g.solid(xx, supportY)) return false;
   return true;
 }
 

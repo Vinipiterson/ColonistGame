@@ -23,6 +23,10 @@ input.onSelect = (id) => {
   hud.selectedId = id;
   renderer.selectedId = id;
 };
+input.onSelectBuilding = (id) => {
+  hud.selectedBuilding = id;
+  renderer.selectedBuilding = id;
+};
 
 const MAX_TICKS_PER_FRAME = 12;
 let last = performance.now();
@@ -54,7 +58,8 @@ window.addEventListener('resize', resize);
 resize();
 requestAnimationFrame(frame);
 hud.log(`Seed ${seed}. Three colonists have arrived.`);
-hud.log(`Build a Toilet soon, then Beds and a Ration Printer: meals run out in a few days.`);
+hud.log(`Build a Toilet soon, then Beds, a Manual Generator and a Ration Printer: meals run out in a few days.`);
+hud.log(`Planters grow crops; a Cooking Station turns them into meals. Click a building to configure it.`);
 
 // Debug / test hook (used by the Playwright e2e script).
 (window as unknown as Record<string, unknown>).__colony = { world, renderer, tools, hud, input };

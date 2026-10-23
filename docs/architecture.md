@@ -20,6 +20,34 @@ TypeScript (strict) + Canvas 2D, Vite (single-file build), Vitest (headless sim 
 - No plumbing/water for now: toilets, sinks, showers just cost matter.
 - Colonists: 1 wide × 2 tall; position = feet cell. Work reach: ±1 tile horizontally, from 3 above the feet to 1 below.
 - Priorities: 1–9 (9 highest) + Emergency (preempts). Bottom-right widget or keys 1–9 (0 = Emergency). Selection persists (also across reloads); default 6. Re-dragging a tool over existing orders re-prioritises them.
+- Power (M3): one colony-wide pool, no wires (matches the global stockpile). Buildings keep enough state that per-network wiring can be added later.
+- Food (M3): harvests give raw crops (own resources); a powered Cooking Station turns them into meals and is used before the Ration Printer. With no meals, colonists eat a raw portion (the amount that makes a meal): +60 hunger, 1.5× slower.
+- Ration Printer needs power (200 W while printing), so the first power source is usually a Manual Generator; the colony starts with 6 meals.
+- Lamps: light radius 5, blocked by solid tiles (line of sight); +10% work speed in lit cells.
+
+## Farming & power (M3)
+| Crop | Seed | Grow | Yield | Needs | Cook ratio |
+|---|---|---|---|---|---|
+| Mushroom | — | 3 days | 2 | nothing | 2 → 1 meal |
+| Tuber | 20 matter | 2 days | 2 | nothing | 2 → 1 meal |
+| Sunberry | 10 coal | 1 day | 2 | 60 W grow lamp | 1 → 1 meal |
+
+| Building | Size | Power | Notes |
+|---|---|---|---|
+| Planter | 1×2 | crop's lamp | crop picked in the inspector (changing it uproots); auto sow / harvest jobs |
+| Cooking Station | 2×2 | 150 W while cooking | crop with the most meals' worth in stock |
+| Ration Printer | 2×2 | 200 W while printing | 100 matter → 1 meal |
+| Manual Generator | 2×2 | +400 W while cranked | crank jobs (30 s, priority 7) while power is short; hunger and sleep drain 2× |
+| Coal Generator | 2×2 | +800 W | 0.1 coal/s |
+| Reactor | 3×3 | +3000 W | 0.01 radioactive/s, no hazard yet |
+| Battery | 1×2 | stores 20 kJ | leaks 0.02%/s |
+| Ceiling Lamp | 1×1 | 10 W | hangs under a solid tile |
+
+- Settled once a second (src/sim/world.ts `updatePower`): cranked energy counts; fuel generators (building id order) run while batteries are below 90% (keep running to 99%) or can't cover the deficit; consumers are served in building id order from generation + storage (brownout: the rest go dark and show a ⚡ badge); surplus charges batteries.
+- Workstations draw power only while a colonist works there. Their jobs are only taken with power available (≥ 5 s of draw stored, or spare generation); a colonist at an unpowered one gives up after 3 s. Skipped/unmet power triggers crank jobs.
+- Automatic jobs are operate orders with a task (print / cook / sow / harvest / crank) and their own cost, one per building (`opOrders`). Meals: stoves then printers top the stock up to max(4, 2×colonists).
+- Light map (src/sim/light.ts): rebuilt only when a lamp's powered state changes or the grid changes near a lit lamp.
+- Inspector: clicking a building shows status + controls (crop, on/off) and issues `configure` commands.
 
 ## Needs
 | Need | Satisfied by | At zero |
@@ -41,13 +69,14 @@ Thresholds per need: want (handle after the current job), urgent (drop the job, 
 - Revalidation: moving colonists whose remaining path crosses a dirty area re-check edges; broken → re-path; unreachable → next-best job.
 - Orders: dig / build (tile or building footprint) / deconstruct (tile or building) / operate (automatic printer jobs). Indexed by priority and 16×16 chunk; only "active" orders (some stand cell in reach) are indexed. Idle retries back off 1 s → 6 s.
 - Anti-trap rules: a job's work spot must be walk-there-and-back from the colonist (spots inside planned walls exempt). A solid build is deferred if it would cut a nearby colonist off from places it can reach today (dry-run region update). Walls over colonists: ask them to step out, after 2 s build anyway and push them up; stacks fill bottom-up; never seal a neighbouring planned wall. A colonist that still ends up cut off triggers a one-time "stuck" warning.
-- Render: chunk bitmap cache (tiles + static buildings) redrawn only when dirty; doors, orders, ghosts, colonists and need icons per frame. Shared vector art (src/render/art.ts) also generates build-bar icons. UI is DOM.
+- Render: chunk bitmap cache (tiles + static buildings) redrawn only when dirty; animated machines (doors, generators, batteries), plants, light glow, no-power badges, orders, ghosts, colonists and need icons per frame. Shared vector art (src/render/art.ts) also generates build-bar icons. UI is DOM; the build bar has one tab per category (Structure, Furniture, Food, Power & light).
+- E2E: Playwright scripts in e2e/ launch the container Chromium, else Playwright's bundled one, else an installed Edge/Chrome (e2e/launch.mjs).
 - Saves: JSON with base64 typed arrays, plus file export/import (M5).
 - Perf budget: 500 colonists, 256×192 map, ≤4 ms per tick average (tests/bench.test.ts).
 
 ## Milestones
 1. DONE. World gen, camera, movement (walk/fall/ladder/scramble), Dig, Build (wall, ladder; into natural tiles), Deconstruct, Cancel, priority widget + Emergency, path revalidation, resources.
 2. DONE. Multi-tile buildings + placement validation, rotatable stair blocks (R), automatic doors, needs + need buildings, Ration Printer, deaths, anti-trap rules, lose screen. 45 unit/scenario tests + 2 browser runs; benchmark ~1.5 ms/tick avg.
-3. NEXT. Plants/food (several crops), power (manual generator, coal generator, battery, reactor).
-4. Skills/XP/likings, rooms + bonuses.
+3. DONE. Planters with three crops, raw crops + Cooking Station, raw eating; power pool with manual/coal generators, reactor, batteries, brownouts; powered printer; ceiling lamps with occluded light and a work bonus; building inspector; build bar tabs. 56 unit/scenario tests + 3 browser runs; benchmark ~0.65 ms/tick avg.
+4. NEXT. Skills/XP/likings, rooms + bonuses.
 5. Arrivals + beacon, save/load, performance pass to 500 colonists.

@@ -1,8 +1,9 @@
 // Canvas 2D renderer.
 // - Tiles and (static) buildings are drawn into cached chunk bitmaps (CHUNK_TILES x CHUNK_TILES)
 //   that are redrawn only when the grid reports a change inside them.
-// - Orders, doors (they animate), colonists, need icons and the placement preview are drawn every
-//   frame, only for what is visible.
+// - Animated machines (doors, generators, batteries), plants, lamp light, "no power" badges,
+//   orders, colonists, need icons and the placement preview are drawn every frame, only for what
+//   is visible.
 // - Drawing uses a tile-unit transform: 1 unit = 1 tile, scaled by the camera zoom.
 
 import { BUILDS, DIRTY_THRESHOLD, EMERGENCY, MAX_HEALTH, NEED_DEFS, Tile, type BuildKind } from '../sim/defs';
@@ -12,7 +13,7 @@ import type { Rect } from '../sim/grid';
 import { orderCost, type Order } from '../sim/orders';
 import { hash2 } from '../sim/rng';
 import type { World } from '../sim/world';
-import { drawBuilding, drawLadder, drawStairBlock } from './art';
+import { ANIMATED, drawBuilding, drawLadder, drawPlant, drawStairBlock } from './art';
 
 const CHUNK_TILES = 32;
 const TEX = 16; // bitmap pixels per tile inside chunk caches
@@ -68,8 +69,10 @@ export class Renderer {
   private seed: number;
   private patterns: Record<string, CanvasPattern | null> = {};
   private doorOpen = new Map<number, number>();
+  private crankAngle = new Map<number, number>();
   private lastTime = 0;
   selectedId = -1;
+  selectedBuilding = -1;
   hoverCell = -1;
   preview: Preview | null = null;
   private dpr = 1;
@@ -172,9 +175,9 @@ export class Renderer {
     for (let y = oy; y < Math.min(g.h, oy + CHUNK_TILES); y++) {
       for (let x = ox; x < Math.min(g.w, ox + CHUNK_TILES); x++) this.paintCell(ctx, x, y);
     }
-    // static buildings (doors animate, so they are drawn per frame)
+    // static buildings (animated ones are drawn per frame)
     for (const b of this.world.buildings.all()) {
-      if (b.kind === 'door') continue;
+      if (ANIMATED.has(b.kind)) continue;
       if (b.x + b.w <= ox || b.x >= ox + CHUNK_TILES || b.y + b.h <= oy || b.y >= oy + CHUNK_TILES) continue;
       drawBuilding(ctx, b.kind, b.x, b.y, b.w, b.h, b.flip);
     }
@@ -291,28 +294,105 @@ export class Renderer {
       }
     }
 
-    this.drawDoors(dt, tx0, ty0, tx1, ty1);
+    this.drawLight(tx0, ty0, tx1, ty1);
+    this.drawAnimated(dt, tx0, ty0, tx1, ty1, timeSec);
     this.drawOrders(tx0, ty0, tx1, ty1, timeSec);
+    this.drawSelectedBuilding();
     this.drawPreview();
     for (const c of this.world.colonists) if (c.state === 'dead') this.drawColonist(c, alpha, timeSec);
     for (const c of this.world.colonists) if (c.state !== 'dead') this.drawColonist(c, alpha, timeSec);
     this.drawHover();
   }
 
-  /** Doors slide open while a colonist is in or next to the doorway. */
-  private drawDoors(dt: number, tx0: number, ty0: number, tx1: number, ty1: number): void {
-    for (const b of this.world.buildings.ofKind('door')) {
+  /** Warm glow over lit cells (levels come from the sim's light map). */
+  private drawLight(tx0: number, ty0: number, tx1: number, ty1: number): void {
+    const L = this.world.light;
+    if (L.litCount === 0) return;
+    const g = this.world.grid;
+    const ctx = this.ctx;
+    ctx.fillStyle = 'rgb(255,214,140)';
+    for (let y = ty0; y <= ty1; y++) {
+      for (let x = tx0; x <= tx1; x++) {
+        const v = L.level[y * g.w + x];
+        if (!v || !g.free(x, y)) continue; // lit wall faces count in the sim, but only open cells glow
+        ctx.globalAlpha = (v / 255) * 0.24;
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * Per-frame buildings: doors slide open while a colonist is in or next to the doorway; the
+   * manual generator's wheel turns while cranked; fuel generators and reactors glow while running;
+   * batteries show their charge; lit lamps, plants, and a badge on consumers left without power.
+   */
+  private drawAnimated(dt: number, tx0: number, ty0: number, tx1: number, ty1: number, time: number): void {
+    const ctx = this.ctx;
+    const w = this.world;
+    for (const b of w.buildings.ofKind('door')) {
       let near = false;
-      for (const c of this.world.colonists) {
+      for (const c of w.colonists) {
         if (c.state === 'dead') continue;
         if (Math.abs(c.px - b.x) < 1.25 && c.py > b.y - 0.5 && c.py < b.y + b.h + 0.5) { near = true; break; }
       }
       const cur = this.doorOpen.get(b.id) ?? 0;
       const next = cur + ((near ? 1 : 0) - cur) * Math.min(1, dt * 9);
       this.doorOpen.set(b.id, next);
-      if (b.x + b.w < tx0 || b.x > tx1 || b.y + b.h < ty0 || b.y > ty1) continue;
-      drawBuilding(this.ctx, 'door', b.x, b.y, b.w, b.h, b.flip, next);
     }
+    for (const b of w.buildings.all()) {
+      if (b.x + b.w < tx0 || b.x > tx1 || b.y + b.h < ty0 || b.y > ty1) continue;
+      const d = BUILDS[b.kind];
+      if (ANIMATED.has(b.kind)) {
+        let anim = 0;
+        if (b.kind === 'door') anim = this.doorOpen.get(b.id) ?? 0;
+        else if (b.kind === 'crank') {
+          anim = (this.crankAngle.get(b.id) ?? 0) + (b.powered ? dt * 5 : 0);
+          this.crankAngle.set(b.id, anim % (Math.PI * 2));
+        } else if (b.kind === 'battery') anim = b.charge / d.capacity!;
+        else anim = b.powered ? time + 0.01 : 0;
+        drawBuilding(ctx, b.kind, b.x, b.y, b.w, b.h, b.flip, anim);
+      } else if (b.kind === 'lamp' && b.powered) {
+        drawBuilding(ctx, 'lamp', b.x, b.y, b.w, b.h, b.flip, 1);
+        const grad = ctx.createRadialGradient(b.x + 0.5, b.y + 0.6, 0.05, b.x + 0.5, b.y + 0.6, 0.9);
+        grad.addColorStop(0, 'rgba(255,220,150,0.55)');
+        grad.addColorStop(1, 'rgba(255,220,150,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(b.x - 0.4, b.y - 0.3, 1.8, 1.8);
+      } else if (b.kind === 'planter' && b.planted) {
+        drawPlant(ctx, b.crop, b.x, b.y, b.growth, b.powered);
+      }
+      if (b.on && !b.powered && w.powerDraw(b) > 0) this.drawNoPower(b.x + b.w - 0.25, b.y + 0.25, time);
+    }
+  }
+
+  /** A blinking lightning bolt: this building wants power and gets none. */
+  private drawNoPower(cx: number, cy: number, time: number): void {
+    const ctx = this.ctx;
+    ctx.globalAlpha = 0.65 + 0.35 * Math.sin(time * 5);
+    ctx.fillStyle = 'rgba(15,12,14,0.85)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffd166';
+    ctx.beginPath();
+    ctx.moveTo(cx + 0.04, cy - 0.15);
+    ctx.lineTo(cx - 0.09, cy + 0.02);
+    ctx.lineTo(cx, cy + 0.02);
+    ctx.lineTo(cx - 0.04, cy + 0.15);
+    ctx.lineTo(cx + 0.09, cy - 0.02);
+    ctx.lineTo(cx, cy - 0.02);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  private drawSelectedBuilding(): void {
+    const b = this.selectedBuilding >= 0 ? this.world.buildings.get(this.selectedBuilding) : undefined;
+    if (!b) return;
+    this.ctx.strokeStyle = '#ffe066';
+    this.ctx.lineWidth = 2.5 / this.cam.zoom;
+    this.ctx.strokeRect(b.x, b.y, b.w, b.h);
   }
 
   /** How open a door is right now (0..1); used by tests and the HUD. */

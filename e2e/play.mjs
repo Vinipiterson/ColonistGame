@@ -2,16 +2,16 @@
 // mouse drags and key presses, fast-forwards the sim, asserts on state and saves screenshots.
 // Usage: npm run build && npm run e2e   (screenshots land in e2e/shots/)
 
-import { chromium } from '@playwright/test';
-import { existsSync, mkdirSync } from 'node:fs';
+import { launchBrowser } from './launch.mjs';
+import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const exe = ['/opt/pw-browsers/chromium-1243/chrome-linux64/chrome'].find((p) => existsSync(p));
 const shots = resolve('e2e/shots');
 mkdirSync(shots, { recursive: true });
-const url = 'file://' + resolve('dist/index.html') + '?seed=20261022';
+const url = pathToFileURL(resolve('dist/index.html')).href + '?seed=20261022';
 
-const browser = await chromium.launch({ executablePath: exe });
+const browser = await launchBrowser();
 const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));

@@ -187,6 +187,35 @@ body {
   background: var(--good);
 }
 
+/* --- building inspector (shares the colonist panel's slot) --- */
+.hud-building {
+  width: 240px;
+}
+.bp-static,
+.bp-dyn {
+  display: grid;
+  gap: 6px;
+}
+.bp-hint {
+  font-size: 13px;
+  line-height: 1.25;
+  color: var(--muted);
+}
+.bp-crops {
+  display: flex;
+  gap: 4px;
+}
+.bp-crop {
+  flex: 1;
+  padding: 4px 6px;
+}
+.bp-toggle {
+  text-align: left;
+}
+.chip-power.bad .chip-val {
+  color: var(--red);
+}
+
 /* --- event log --- */
 .hud-log {
   position: absolute;
@@ -250,22 +279,28 @@ body {
 .tool-cancel.active { border-color: #ddd; background: #3c3c3c; }
 
 .buildbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  display: grid;
+  gap: 6px;
   padding: 7px;
   border-color: #2d4a66;
   max-width: min(760px, calc(100vw - 220px));
 }
-.bgroup {
-  display: grid;
+.btabs {
+  display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
-.bgroup-title {
+.btab {
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 11px;
+  font-size: 12px;
+  padding: 3px 9px;
   color: var(--muted);
+}
+.btab.active {
+  border-color: var(--blue);
+  background: #1f344a;
+  color: #fff;
 }
 .bgroup-row {
   display: flex;
@@ -433,7 +468,7 @@ body {
   .hud-top { right: auto; max-width: calc(100% - 24px); }
   .hud-speed { top: auto; bottom: calc(var(--edge-b) + 196px); flex-wrap: wrap; width: 132px; }
   .hud-hint { display: none; }
-  .hud-log { top: calc(var(--edge-t) + 80px); }
+  .hud-log { top: calc(var(--edge-t) + 104px); }
   .hud-colonist { top: auto; bottom: calc(var(--edge-b) + 292px); width: 180px; }
   .buildbar { max-width: calc(100vw - 24px); }
   #hud:has(.buildbar:not(.hidden)) .hud-colonist { display: none; }

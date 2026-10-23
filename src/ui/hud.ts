@@ -1,11 +1,12 @@
-// DOM HUD: resources, speed, tool bar + build bar (bottom-left), priority widget (bottom-right),
-// colonist panel, event log and the game-over screen. Reads sim state each frame; writes only
-// to ToolState (never to the sim).
+// DOM HUD: resources + power, speed, tool bar + build bar (bottom-left), priority widget
+// (bottom-right), colonist panel / building inspector, event log and the game-over screen.
+// Reads sim state each frame; writes only to ToolState, or issues sim Commands (inspector).
 
 import {
-  BUILDS, BUILD_LIST, DAY_SECONDS, EMERGENCY, NEEDS, NEED_DEFS, NEED_LABEL, RESOURCE_LABEL, RESOURCES,
-  type BuildCategory,
+  BUILDS, BUILD_LIST, CROPS, CROP_LIST, DAY_SECONDS, EMERGENCY, NEEDS, NEED_DEFS, NEED_LABEL, RESOURCE_LABEL,
+  RESOURCES, type BuildCategory, type BuildKind, type CropId,
 } from '../sim/defs';
+import type { Building } from '../sim/buildings';
 import { buildIcon } from '../render/art';
 import type { World } from '../sim/world';
 import type { ToolMode, ToolState } from './input';
@@ -17,8 +18,18 @@ const TOOL_BUTTONS: { mode: ToolMode; label: string; key: string; hint: string }
   { mode: 'cancel', label: 'Cancel', key: 'C', hint: 'Drag to cancel pending orders.' },
 ];
 
-const RES_COLOR: Record<string, string> = { matter: '#a7764a', coal: '#4a4643', radioactive: '#7dff5a', food: '#f2a93b' };
-const CATEGORY_LABEL: Record<BuildCategory, string> = { structure: 'Structure', furniture: 'Furniture' };
+const RES_COLOR: Record<string, string> = {
+  matter: '#a7764a', coal: '#4a4643', radioactive: '#7dff5a',
+  mushroom: '#c0503a', tuber: '#b5835a', sunberry: '#ff7a4d', food: '#f2a93b',
+};
+const CATEGORY_LABEL: Record<BuildCategory, string> = {
+  structure: 'Structure', furniture: 'Furniture', food: 'Food', power: 'Power & light',
+};
+/** Buildings with an on/off switch in the inspector. */
+const SWITCHABLE = new Set<BuildKind>(['planter', 'printer', 'stove', 'crank', 'coalgen', 'reactor', 'lamp']);
+const CROP_SET = new Set<string>(CROP_LIST);
+
+const kJ = (j: number) => (j / 1000).toFixed(j < 10_000 ? 1 : 0);
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -31,18 +42,28 @@ export class Hud {
   private world: World;
   private tools: ToolState;
   private resEls: Record<string, HTMLElement> = {};
+  private resChips: Record<string, HTMLElement> = {};
+  private powerChip!: HTMLElement;
+  private powerEl!: HTMLElement;
   private popEl!: HTMLElement;
   private dayEl!: HTMLElement;
   private speedBtns: HTMLButtonElement[] = [];
   private toolBtns = new Map<ToolMode, HTMLButtonElement>();
   private buildBar!: HTMLElement;
+  private buildCat: BuildCategory = 'structure';
+  private tabBtns = new Map<BuildCategory, HTMLButtonElement>();
+  private catRows = new Map<BuildCategory, HTMLElement>();
   private buildBtns = new Map<string, HTMLButtonElement>();
   private prioBtns = new Map<number, HTMLButtonElement>();
   private hintEl!: HTMLElement;
   private panel!: HTMLElement;
+  private bpanel!: HTMLElement;
+  private bpStatic!: HTMLElement;
+  private bpDyn!: HTMLElement;
   private logEl!: HTMLElement;
   private overlay!: HTMLElement;
   selectedId = -1;
+  selectedBuilding = -1;
   onZoom: (factor: number) => void = () => {};
 
   constructor(root: HTMLElement, world: World, tools: ToolState) {
@@ -64,8 +85,15 @@ export class Hud {
       const v = el('span', 'chip-val', '0');
       chip.append(v);
       this.resEls[r] = v;
+      this.resChips[r] = chip;
       top.append(chip);
     }
+    this.powerChip = el('div', 'chip chip-power hidden');
+    this.powerChip.title = 'Power: produced / used, and stored in batteries';
+    this.powerChip.append(el('span', 'chip-label', '⚡ Power'));
+    this.powerEl = el('span', 'chip-val', '');
+    this.powerChip.append(this.powerEl);
+    top.append(this.powerChip);
     const pop = el('div', 'chip');
     pop.append(el('span', 'chip-label', 'Colonists'));
     this.popEl = el('span', 'chip-val', '3');
@@ -97,23 +125,47 @@ export class Hud {
     // right: colonist panel
     this.panel = el('div', 'hud-colonist panel hidden');
     root.append(this.panel);
+    // right: building inspector (same slot; buttons live in the static part so they survive updates)
+    this.bpanel = el('div', 'hud-colonist hud-building panel hidden');
+    this.bpStatic = el('div', 'bp-static');
+    this.bpDyn = el('div', 'bp-dyn');
+    this.bpanel.append(this.bpStatic, this.bpDyn);
+    this.bpanel.addEventListener('click', (e) => {
+      const t = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
+      const b = this.world.buildings.get(this.selectedBuilding);
+      if (!t || !b) return;
+      if (t.dataset.act === 'crop') this.world.issue({ type: 'configure', buildingId: b.id, crop: t.dataset.crop as CropId });
+      else if (t.dataset.act === 'toggle') this.world.issue({ type: 'configure', buildingId: b.id, on: !b.on });
+    });
+    root.append(this.bpanel);
 
     // left: event log
     this.logEl = el('div', 'hud-log');
     root.append(this.logEl);
 
-    // bottom-left: tools + build bar
+    // bottom-left: tools + build bar (one category tab at a time, so it stays short)
     const bl = el('div', 'hud-bl');
     this.buildBar = el('div', 'buildbar panel hidden');
-    for (const cat of ['structure', 'furniture'] as BuildCategory[]) {
-      const group = el('div', 'bgroup');
-      group.append(el('div', 'bgroup-title', CATEGORY_LABEL[cat]));
+    const tabs = el('div', 'btabs');
+    this.buildBar.append(tabs);
+    for (const cat of ['structure', 'furniture', 'food', 'power'] as BuildCategory[]) {
+      const tab = el('button', 'btn btab', CATEGORY_LABEL[cat]);
+      tab.dataset.cat = cat;
+      tab.onclick = () => {
+        this.buildCat = cat;
+        this.syncTools();
+      };
+      this.tabBtns.set(cat, tab);
+      tabs.append(tab);
       const row = el('div', 'bgroup-row');
+      row.dataset.cat = cat;
+      this.catRows.set(cat, row);
       for (const k of BUILD_LIST) {
         const d = BUILDS[k];
         if (d.category !== cat) continue;
         const b = el('button', 'btn build-btn');
         b.dataset.build = k;
+        b.dataset.cat = cat;
         const icon = el('img', 'bicon');
         icon.alt = '';
         icon.src = buildIcon(k, d.w, d.h);
@@ -125,8 +177,7 @@ export class Hud {
         this.buildBtns.set(k, b);
         row.append(b);
       }
-      group.append(row);
-      this.buildBar.append(group);
+      this.buildBar.append(row);
     }
     const toolbar = el('div', 'toolbar panel');
     for (const t of TOOL_BUTTONS) {
@@ -179,6 +230,8 @@ export class Hud {
     for (const [m, b] of this.toolBtns) b.classList.toggle('active', t.mode === m);
     this.buildBar.classList.toggle('hidden', t.mode !== 'build');
     for (const [k, b] of this.buildBtns) b.classList.toggle('active', t.build === k);
+    for (const [c, b] of this.tabBtns) b.classList.toggle('active', this.buildCat === c);
+    for (const [c, r] of this.catRows) r.classList.toggle('hidden', this.buildCat !== c);
     for (const [p, b] of this.prioBtns) b.classList.toggle('active', t.priority === p);
     this.speedBtns.forEach((b, i) => b.classList.toggle('active', i === 0 ? t.paused : !t.paused && t.speed === i));
     const tb = TOOL_BUTTONS.find((x) => x.mode === t.mode);
@@ -195,7 +248,7 @@ export class Hud {
     }
     this.hintEl.textContent = tb
       ? `${hint} New orders: ${pl}. Right-click or Esc to exit.`
-      : 'Pick a tool below. Drag the map or use WASD to pan, wheel to zoom, click a colonist for details.';
+      : 'Pick a tool below. Drag the map or use WASD to pan, wheel to zoom, click a colonist or building for details.';
     this.hintEl.classList.toggle('mode', !!tb);
   }
 
@@ -212,6 +265,16 @@ export class Hud {
     for (const r of RESOURCES) {
       const v = String(Math.floor(w.resources[r]));
       if (this.resEls[r].textContent !== v) this.resEls[r].textContent = v;
+      // crops only show up once there are some
+      if (CROP_SET.has(r)) this.resChips[r].classList.toggle('hidden', w.resources[r] < 1);
+    }
+    const p = w.power;
+    const anyPower = p.capacity > 0 || p.gen > 0 || p.use > 0 || p.unmet > 0 || p.spare > 0;
+    this.powerChip.classList.toggle('hidden', !anyPower);
+    if (anyPower) {
+      const txt = `${Math.round(p.gen)}/${Math.round(p.use + p.unmet)} W` + (p.capacity > 0 ? ` · ${kJ(p.stored)}/${kJ(p.capacity)} kJ` : '');
+      if (this.powerEl.textContent !== txt) this.powerEl.textContent = txt;
+      this.powerChip.classList.toggle('bad', p.unmet > 0);
     }
     const pop = `${w.aliveCount}`;
     if (this.popEl.textContent !== pop) this.popEl.textContent = pop;
@@ -234,6 +297,78 @@ export class Hud {
       }
     }
     this.updatePanel();
+    this.updateBuildingPanel();
+  }
+
+  private updateBuildingPanel(): void {
+    const b = this.selectedBuilding >= 0 ? this.world.buildings.get(this.selectedBuilding) : undefined;
+    if (!b || this.selectedId >= 0) {
+      this.bpanel.classList.add('hidden');
+      return;
+    }
+    this.bpanel.classList.remove('hidden');
+    const d = BUILDS[b.kind];
+    let s = `<div class="cp-name">${d.name}</div><div class="bp-hint">${d.hint}</div>`;
+    if (b.kind === 'planter') {
+      s += `<div class="bp-crops">` + CROP_LIST.map((k) =>
+        `<button class="btn bp-crop${b.crop === k ? ' active' : ''}" data-act="crop" data-crop="${k}">${CROPS[k].name}</button>`,
+      ).join('') + `</div><div class="bp-hint">${CROPS[b.crop].hint}</div>`;
+    }
+    if (SWITCHABLE.has(b.kind)) {
+      s += `<button class="btn bp-toggle${b.on ? ' active' : ''}" data-act="toggle">${b.on ? 'On · click to switch off' : 'Off · click to switch on'}</button>`;
+    }
+    if (this.bpStatic.innerHTML !== s) this.bpStatic.innerHTML = s;
+    const dyn = this.buildingStatus(b);
+    if (this.bpDyn.innerHTML !== dyn) this.bpDyn.innerHTML = dyn;
+  }
+
+  /** Live rows for the inspector: growth, power, charge, fuel, who is working there. */
+  private buildingStatus(b: Building): string {
+    const w = this.world;
+    const d = BUILDS[b.kind];
+    const row = (k: string, v: string) => `<div class="cp-row"><span>${k}</span><b>${v}</b></div>`;
+    const bar = (f: number, cls = '') => `<div class="cp-bar ${cls}"><i style="width:${Math.round(Math.max(0, Math.min(1, f)) * 100)}%"></i></div>`;
+    const job = w.jobOf(b.id);
+    const worker = job && job.claimedBy >= 0 ? w.colonists.find((c) => c.id === job.claimedBy)?.name : undefined;
+    const jobText = job ? (worker ? `${worker}` : 'Waiting for a colonist') : '—';
+    let out = '';
+    switch (b.kind) {
+      case 'planter': {
+        const crop = CROPS[b.crop];
+        const state = !b.on ? 'Switched off' : !b.planted ? 'Waiting to be sown'
+          : b.growth >= 1 ? 'Ripe' : crop.powerUse > 0 && !b.powered ? 'No power: not growing' : 'Growing';
+        out += row('Status', state);
+        if (b.planted) out += row('Growth', `${Math.floor(b.growth * 100)}%`) + bar(b.growth);
+        if (crop.powerUse > 0) out += row('Grow lamp', `${crop.powerUse} W`);
+        if (job) out += row(job.task === 'sow' ? 'Sowing' : 'Harvest', jobText);
+        break;
+      }
+      case 'printer':
+      case 'stove':
+        out += row('Power', `${d.powerUse} W while working`);
+        out += row('Job', job ? `${job.task === 'cook' ? 'Cook' : 'Print'} a meal: ${jobText}` : 'Meal stock is full');
+        if (job && worker && !b.powered) out += row('Status', 'Waiting for power');
+        break;
+      case 'lamp':
+        out += row('Status', !b.on ? 'Switched off' : b.powered ? `Lit (${d.powerUse} W)` : 'No power');
+        break;
+      case 'crank':
+        out += row('Output', b.powered ? `${d.powerGen} W (cranked)` : 'Idle');
+        out += row('Job', job ? `Crank: ${jobText}` : 'Power is fine');
+        break;
+      case 'coalgen':
+      case 'reactor': {
+        const f = d.fuel!;
+        const fuelLeft = w.resources[f.res] < f.perSec ? 'No fuel' : 'Idle (power is fine)';
+        out += row('Status', !b.on ? 'Switched off' : b.powered ? `Running: ${d.powerGen} W` : fuelLeft);
+        out += row('Fuel', `${RESOURCE_LABEL[f.res]} ${Math.floor(w.resources[f.res])} (−${f.perSec}/s)`);
+        break;
+      }
+      case 'battery':
+        out += row('Charge', `${kJ(b.charge)} / ${kJ(d.capacity!)} kJ`) + bar(b.charge / d.capacity!);
+        break;
+    }
+    return out;
   }
 
   private updatePanel(): void {

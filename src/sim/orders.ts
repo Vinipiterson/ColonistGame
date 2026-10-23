@@ -1,5 +1,5 @@
 // Orders = work units: player intent on tiles (dig / build / deconstruct) plus automatic jobs
-// (operate: e.g. a colonist running the Ration Printer). Each has a priority.
+// (operate: printing rations, cooking, sowing, harvesting, cranking a generator). Each has a priority.
 // One order is one job. Indexed by priority and by 16x16 chunk for job search.
 //
 // Shapes:
@@ -9,13 +9,16 @@
 //   operate                 -> a building's use cell; not written to the grid's order layer.
 
 import {
-  BUILDS, DECONSTRUCT_WORK, EMERGENCY, PRINTER_MATTER, TILE_INFO, Tile, type BuildKind, type ResourceId,
+  BUILDS, DECONSTRUCT_WORK, EMERGENCY, TILE_INFO, Tile, type BuildKind, type ResourceId,
 } from './defs';
 import { canPlaceBuilding, footprint, useCell, type BuildingStore } from './buildings';
 import type { Grid } from './grid';
 import { canStand } from './nav';
 
 export type OrderKind = 'dig' | 'build' | 'deconstruct' | 'operate';
+/** What an operate order does at its building. */
+export type OperateTask = 'print' | 'cook' | 'sow' | 'harvest' | 'crank';
+export type Cost = Partial<Record<ResourceId, number>>;
 
 export interface Order {
   id: number;
@@ -32,6 +35,9 @@ export interface Order {
   flip: boolean;
   /** Building targeted by a deconstruct/operate order, or -1. */
   buildingId: number;
+  /** Operate orders: the task and what it costs (paid when the work starts). */
+  task: OperateTask | null;
+  opCost: Cost;
   work: number; // seconds needed (build / dig / deconstruct / operate phase)
   progress: number; // seconds done
   /** Build on a natural tile: seconds to dig it out first (0 if the cell was empty). */
@@ -56,6 +62,8 @@ export interface OrderOptions {
   flip?: boolean;
   buildingId?: number;
   work?: number;
+  task?: OperateTask;
+  cost?: Cost;
 }
 
 /** Spatial bucket size for job search. */
@@ -164,7 +172,7 @@ export class OrderStore {
       ? TILE_INFO[g.tile[cell]].digWork : 0;
     const o: Order = {
       id: this.nextId++, kind, cell, x, y, cells, priority, build, flip: !!opts.flip,
-      buildingId: opts.buildingId ?? -1, work,
+      buildingId: opts.buildingId ?? -1, task: opts.task ?? null, opCost: opts.cost ?? {}, work,
       progress: 0, digWork, digProgress: 0, waitTicks: 0, deferUntil: 0,
       claimedBy: -1, paid: false, removed: false, waitingClear: false, unreach: null, active: false,
     };
@@ -256,14 +264,19 @@ export function orderStillValid(g: Grid, o: Order, buildings: BuildingStore): bo
     case 'deconstruct':
       if (o.buildingId >= 0) return !!buildings.get(o.buildingId);
       return (g.built[c] === 1 && g.tile[c] !== Tile.Empty) || g.stairs[c] === 1;
-    case 'operate':
-      return !!buildings.get(o.buildingId);
+    case 'operate': {
+      const b = buildings.get(o.buildingId);
+      if (!b) return false;
+      if (o.task === 'sow') return !b.planted;
+      if (o.task === 'harvest') return b.planted && b.growth >= 1;
+      return true;
+    }
   }
 }
 
-export function orderCost(o: Order): Partial<Record<ResourceId, number>> {
+export function orderCost(o: Order): Cost {
   if (o.kind === 'build') return BUILDS[o.build!].cost;
-  if (o.kind === 'operate') return { matter: PRINTER_MATTER };
+  if (o.kind === 'operate') return o.opCost;
   return {};
 }
 

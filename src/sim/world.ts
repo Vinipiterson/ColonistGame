@@ -5,15 +5,20 @@
 //   2. path service runs searches (node budget)
 //   3. every colonist updates (needs, movement, work, using buildings, falls)
 //   4. grid changes from this tick -> region rebuild + path revalidation
-//   5. idle colonists get jobs (assignment budget); printers queue ration jobs
-//   6. emergency preemption (every 10 ticks)
+//   5. once a second: power settles, plants grow, machines queue their jobs (cook / print / sow /
+//      harvest / crank); lamp light is rebuilt when it changed
+//   6. idle colonists get jobs (assignment budget)
+//   7. emergency preemption (every 10 ticks)
 
 import {
-  BUILDS, BLADDER_HOLD_LIMIT, BED_SLEEP_RATE, DECONSTRUCT_REFUND, DIRTY_THRESHOLD, DIRTY_WORK_SPEED, DT,
-  EAT_TIME_STANDING, EAT_TIME_TABLE, EMERGENCY, EXHAUST_DAMAGE, FLOOR_SLEEP_FACTOR, GRAVITY, NEEDS,
-  NEED_DEFS, PRINTER_PRIORITY, PRINTER_PRIORITY_SHORT, PRINTER_WORK, RESOURCES, SHOWER_TIME,
-  SINK_HYGIENE, SINK_TIME, SKIP_SINK_HYGIENE, SLEEP_HEAL, STARVE_DAMAGE, START_RESOURCES, TILE_INFO,
-  TOILET_TIME, Tile, WALK_SPEED, fallDamage, type BuildKind, type NeedId, type ResourceId,
+  BATTERY_LEAK, BUILDS, BLADDER_HOLD_LIMIT, BED_SLEEP_RATE, COOK_WORK, CRANK_BELOW, CRANK_DRAIN, CRANK_PRIORITY,
+  CRANK_WORK, CROPS, CROP_LIST, DECONSTRUCT_REFUND, DIRTY_THRESHOLD, DIRTY_WORK_SPEED, DT, EAT_TIME_STANDING,
+  EAT_TIME_TABLE, EMERGENCY, EXHAUST_DAMAGE, FARM_PRIORITY, FLOOR_SLEEP_FACTOR, GEN_START, GEN_STOP, GRAVITY,
+  HARVEST_WORK, LAMP_RADIUS, LIGHT_WORK_BONUS, NEEDS, NEED_DEFS, POWER_RESERVE_SECONDS, POWER_TICKS, POWER_WAIT,
+  PRINTER_MATTER, PRINTER_PRIORITY, PRINTER_PRIORITY_SHORT, PRINTER_WORK, RAW_EAT_FACTOR, RAW_HUNGER, RESOURCES,
+  SHOWER_TIME, SINK_HYGIENE, SINK_TIME, SKIP_SINK_HYGIENE, SLEEP_HEAL, SOW_WORK, STARVE_DAMAGE, START_RESOURCES,
+  TICK_HZ, TILE_INFO, TOILET_TIME, Tile, WALK_SPEED, fallDamage, type BuildKind, type CropId, type NeedId,
+  type ResourceId,
 } from './defs';
 import {
   BuildingStore, buildingPlacements, canPlaceBuilding, freeSlot, slotUsable, useCell, type Building,
@@ -21,15 +26,30 @@ import {
 import { Colonist, NAMES, TINTS, type NeedTaskKind } from './colonist';
 import { normRect, type Command, type SimEvent } from './commands';
 import { Grid, type Rect } from './grid';
+import { LightMap } from './light';
 import { MAX_NEIGHBORS, Move, canOccupy, canStand, edgeDuration, edgeValid, landingY, neighbors } from './nav';
 import {
   JOB_CHUNK, OrderStore, canPlaceBuild, canPlaceDeconstruct, canPlaceDig, hasWorkPositions, inReach,
-  needsDig, orderCost, orderIsSolidBuild, orderStillValid, workPositions, type Order,
+  needsDig, orderCost, orderIsSolidBuild, orderStillValid, workPositions, type Cost, type OperateTask, type Order,
 } from './orders';
 import { PathService, type Path } from './pathfinder';
 import { Regions } from './regions';
 import { Rng } from './rng';
 import { generateWorld } from './worldgen';
+
+/** The colony's power pool, as settled in the last power update (watts, joules). */
+export interface PowerStats {
+  /** Produced (generators running + cranking). */
+  gen: number;
+  /** Delivered to consumers. */
+  use: number;
+  /** Wanted by consumers but not delivered (brownout). */
+  unmet: number;
+  /** Generation that could still be added on top of the demand (idle fuel generators, cranking). */
+  spare: number;
+  stored: number;
+  capacity: number;
+}
 
 export interface WorldOptions {
   seed: number;
@@ -67,9 +87,11 @@ export class World {
   readonly paths: PathService;
   readonly buildings: BuildingStore;
   readonly orders: OrderStore;
+  readonly light: LightMap;
   readonly rng: Rng;
   colonists: Colonist[] = [];
   resources: Record<ResourceId, number> = { ...START_RESOURCES };
+  power: PowerStats = { gen: 0, use: 0, unmet: 0, spare: 0, stored: 0, capacity: 0 };
   tick = 0;
   events: SimEvent[] = [];
   gameOver = false;
@@ -85,8 +107,11 @@ export class World {
   /** A build was skipped for lack of resources: wake idle colonists when resources arrive. */
   private buildsWaiting = false;
   private nextColonistId = 1;
-  /** Ration Printer id -> its pending operate order. */
-  private printerOrders = new Map<number, Order>();
+  /** Building id -> its pending automatic (operate) order; one at a time per building. */
+  private opOrders = new Map<number, Order>();
+  /** A powered workstation job was skipped for lack of power since the last machine update. */
+  private powerBlocked = false;
+  private lightDirty = false;
   private nc = new Int32Array(MAX_NEIGHBORS);
   private nt = new Uint8Array(MAX_NEIGHBORS);
   private nk = new Float32Array(MAX_NEIGHBORS);
@@ -107,6 +132,7 @@ export class World {
     this.paths = new PathService(grid, this.regions);
     this.buildings = new BuildingStore(grid);
     this.orders = new OrderStore(grid, this.buildings);
+    this.light = new LightMap(grid);
     grid.dirty.length = 0;
   }
 
@@ -160,7 +186,12 @@ export class World {
         }
       }
     }
-    if (this.tick % 20 === 0) this.managePrinters();
+    if (this.tick % POWER_TICKS === 0) {
+      this.updatePower();
+      this.updatePlanters();
+      this.manageMachines();
+    }
+    if (this.lightDirty) this.rebuildLight();
     this.runAssignment();
     if (this.tick % 10 === 0) this.emergencyPreemption();
   }
@@ -175,6 +206,10 @@ export class World {
   }
 
   applyCommand(cmd: Command): void {
+    if (cmd.type === 'configure') {
+      this.configure(cmd.buildingId, cmd.on, cmd.crop);
+      return;
+    }
     const g = this.grid;
     const rect = normRect(cmd.rect.x0, cmd.rect.y0, cmd.rect.x1, cmd.rect.y1);
     switch (cmd.type) {
@@ -239,8 +274,33 @@ export class World {
       if (c && c.job === o) this.dropJob(c, false);
     }
     if (o.paid) this.refund(orderCost(o), 1);
-    if (o.kind === 'operate') this.printerOrders.delete(o.buildingId);
+    if (o.kind === 'operate' && this.opOrders.get(o.buildingId) === o) this.opOrders.delete(o.buildingId);
     this.orders.remove(o);
+  }
+
+  /** Inspector settings. Switching off cancels the building's automatic job; a new crop uproots. */
+  private configure(id: number, on: boolean | undefined, crop: CropId | undefined): void {
+    const b = this.buildings.get(id);
+    if (!b) return;
+    const cancelOp = () => {
+      const o = this.opOrders.get(b.id);
+      if (o) this.cancelOrder(o);
+    };
+    if (on !== undefined && on !== b.on) {
+      b.on = on;
+      if (!on) {
+        cancelOp();
+        if (b.kind === 'lamp' && b.powered) this.lightDirty = true;
+        b.powered = false;
+      }
+    }
+    if (crop && b.kind === 'planter' && crop !== b.crop) {
+      cancelOp();
+      b.crop = crop;
+      b.planted = false;
+      b.growth = 0;
+    }
+    this.wakeIdle = true;
   }
 
   // ------------------------------------------------------------------ resources
@@ -257,37 +317,215 @@ export class World {
     if (this.buildsWaiting) this.wakeIdle = true;
   }
 
-  // ------------------------------------------------------------------ ration printers
+  // ------------------------------------------------------------------ machines: food, farms, cranking
 
   /** Meals the colony tries to keep in stock. */
   get foodTarget(): number {
     return Math.max(4, 2 * this.aliveCount);
   }
 
-  /** Each printer gets one "print a meal" job while the stock is below target. */
-  private managePrinters(): void {
-    const printers = this.buildings.ofKind('printer');
-    if (printers.size === 0) return;
-    let planned = this.resources.food + this.printerOrders.size;
-    const short = this.resources.food < this.aliveCount;
-    for (const b of printers) {
-      const existing = this.printerOrders.get(b.id);
-      if (existing) {
-        if (existing.removed) this.printerOrders.delete(b.id);
-        else {
-          const p = short ? PRINTER_PRIORITY_SHORT : PRINTER_PRIORITY;
-          if (existing.priority < p) this.orders.setPriority(existing, p);
-          continue;
+  /**
+   * Once a second, each machine without a pending job may get one:
+   * Cooking Stations (crops -> meal) then Ration Printers (matter -> meal) top the meal stock up to
+   * the target; planters get sown when empty and harvested when ripe; manual generators get
+   * cranked while power is short.
+   */
+  private manageMachines(): void {
+    for (const [id, o] of this.opOrders) if (o.removed) this.opOrders.delete(id);
+    const foodPrio = this.resources.food < this.aliveCount ? PRINTER_PRIORITY_SHORT : PRINTER_PRIORITY;
+    let planned = this.resources.food;
+    const reserved: Cost = {};
+    for (const o of this.opOrders.values()) {
+      if (o.task !== 'cook' && o.task !== 'print') continue;
+      planned++;
+      if (o.priority < foodPrio) this.orders.setPriority(o, foodPrio);
+      if (!o.paid) for (const r of RESOURCES) if (o.opCost[r]) reserved[r] = (reserved[r] ?? 0) + o.opCost[r]!;
+    }
+    for (const b of this.buildings.ofKind('stove')) {
+      if (planned >= this.foodTarget) break;
+      if (!b.on || this.opOrders.has(b.id)) continue;
+      const crop = this.cookableCrop(reserved);
+      if (!crop) break;
+      const n = CROPS[crop].perMeal;
+      reserved[crop] = (reserved[crop] ?? 0) + n;
+      this.addOp(b, 'cook', foodPrio, COOK_WORK, { [crop]: n });
+      planned++;
+    }
+    for (const b of this.buildings.ofKind('printer')) {
+      if (planned >= this.foodTarget) break;
+      if (!b.on || this.opOrders.has(b.id)) continue;
+      this.addOp(b, 'print', foodPrio, PRINTER_WORK, { matter: PRINTER_MATTER });
+      planned++;
+    }
+    for (const b of this.buildings.ofKind('planter')) {
+      if (!b.on || this.opOrders.has(b.id)) continue;
+      if (!b.planted) this.addOp(b, 'sow', FARM_PRIORITY, SOW_WORK, CROPS[b.crop].sowCost);
+      else if (b.growth >= 1) this.addOp(b, 'harvest', FARM_PRIORITY, HARVEST_WORK, {});
+    }
+    const p = this.power;
+    const short = p.unmet > 0 || this.powerBlocked || (p.capacity > 0 && p.use > 0 && p.stored < CRANK_BELOW * p.capacity);
+    this.powerBlocked = false;
+    if (short) {
+      for (const b of this.buildings.ofKind('crank')) {
+        if (b.on && !this.opOrders.has(b.id)) this.addOp(b, 'crank', CRANK_PRIORITY, CRANK_WORK, {});
+      }
+    }
+  }
+
+  /** The building's pending automatic job, if any (for the inspector). */
+  jobOf(buildingId: number): Order | undefined {
+    return this.opOrders.get(buildingId);
+  }
+
+  private addOp(b: Building, task: OperateTask, priority: number, work: number, cost: Cost): void {
+    const o = this.orders.create('operate', useCell(this.grid, b, 0), priority, null, { buildingId: b.id, work, task, cost });
+    this.opOrders.set(b.id, o);
+    this.wakeIdle = true;
+  }
+
+  /** The crop with the most meals' worth in stock (beyond what pending cook jobs reserved). */
+  private cookableCrop(reserved: Cost): CropId | null {
+    let best: CropId | null = null;
+    let bestN = 0;
+    for (const k of CROP_LIST) {
+      const n = Math.floor((this.resources[k] - (reserved[k] ?? 0)) / CROPS[k].perMeal);
+      if (n > bestN) {
+        bestN = n;
+        best = k;
+      }
+    }
+    return best;
+  }
+
+  /** Plants grow while switched on (and, for crops with a grow lamp, while powered). */
+  private updatePlanters(): void {
+    const secs = POWER_TICKS * DT;
+    for (const b of this.buildings.ofKind('planter')) {
+      if (!b.on || !b.planted || b.growth >= 1) continue;
+      const crop = CROPS[b.crop];
+      if (crop.powerUse > 0 && !b.powered) continue;
+      b.growth = Math.min(1, b.growth + secs / crop.growSeconds);
+    }
+  }
+
+  // ------------------------------------------------------------------ power
+
+  /** Watts a consumer wants this second (0 = idle or off). Workstations draw only while operated. */
+  powerDraw(b: Building): number {
+    if (!b.on) return 0;
+    if (b.kind === 'planter') return b.planted && b.growth < 1 ? CROPS[b.crop].powerUse : 0;
+    const use = BUILDS[b.kind].powerUse ?? 0;
+    if (use === 0 || b.kind === 'lamp') return use;
+    return this.tick - b.busyTick <= POWER_TICKS ? use : 0;
+  }
+
+  /**
+   * Settle one second of power over the colony-wide pool:
+   * cranking adds what was cranked; fuel generators (building id order) run while batteries are
+   * low (with hysteresis) or can't cover what demand exceeds supply, burning fuel; consumers are served in building
+   * id order from generation + batteries (brownout: the rest go unpowered); the surplus charges
+   * the batteries, which leak a little.
+   */
+  private updatePower(): void {
+    const secs = POWER_TICKS * DT;
+    const p = this.power;
+    const hadPower = p.spare > 0 || p.stored > 0;
+    const consumers: Building[] = [];
+    const draws: number[] = [];
+    const gens: Building[] = [];
+    const batteries: Building[] = [];
+    let demand = 0, crankJ = 0, capacity = 0, stored = 0;
+    for (const b of this.buildings.all()) {
+      const d = BUILDS[b.kind];
+      if (d.capacity) {
+        batteries.push(b);
+        capacity += d.capacity;
+        stored += b.charge;
+      } else if (b.kind === 'crank') {
+        crankJ += d.powerGen! * b.crankTicks * DT;
+        b.powered = b.crankTicks > 0;
+        b.crankTicks = 0;
+      } else if (d.fuel) gens.push(b);
+      else {
+        const w = this.powerDraw(b);
+        if (w > 0) {
+          consumers.push(b);
+          draws.push(w);
+          demand += w;
+        } else if (b.powered) {
+          if (b.kind === 'lamp') this.lightDirty = true;
+          b.powered = false;
         }
       }
-      if (planned >= this.foodTarget) continue;
-      const o = this.orders.create('operate', useCell(this.grid, b, 0), short ? PRINTER_PRIORITY_SHORT : PRINTER_PRIORITY, null, {
-        buildingId: b.id, work: PRINTER_WORK,
-      });
-      this.printerOrders.set(b.id, o);
-      planned++;
-      this.wakeIdle = true;
     }
+    let supply = crankJ / secs;
+    let idleGen = 0;
+    for (const b of gens) {
+      const d = BUILDS[b.kind];
+      const burn = d.fuel!.perSec * secs;
+      const canRun = b.on && this.resources[d.fuel!.res] >= burn;
+      const low = capacity > 0 && stored < capacity * (b.powered ? GEN_STOP : GEN_START);
+      const deficit = demand > supply && stored < (demand - supply) * secs;
+      b.powered = canRun && (deficit || low);
+      if (b.powered) {
+        supply += d.powerGen!;
+        this.resources[d.fuel!.res] -= burn;
+      } else if (canRun) idleGen += d.powerGen!;
+    }
+    const avail = supply * secs + stored;
+    let used = 0;
+    for (let i = 0; i < consumers.length; i++) {
+      const b = consumers[i];
+      const need = draws[i] * secs;
+      const ok = avail - used >= need;
+      if (ok) used += need;
+      if (b.kind === 'lamp' && ok !== b.powered) this.lightDirty = true;
+      b.powered = ok;
+    }
+    stored = Math.min(capacity, Math.max(0, stored + supply * secs - used)) * (1 - BATTERY_LEAK * secs);
+    for (const b of batteries) b.charge = stored * BUILDS[b.kind].capacity! / capacity;
+    p.gen = supply;
+    p.use = used / secs;
+    p.unmet = demand - p.use;
+    p.spare = Math.max(0, supply + idleGen - demand);
+    p.stored = stored;
+    p.capacity = capacity;
+    if (!hadPower && (p.spare > 0 || p.stored > 0)) this.wakeIdle = true;
+  }
+
+  /** Is there power for a workstation drawing w watts: enough stored, or spare generation? */
+  canPower(w: number): boolean {
+    return this.power.stored >= w * POWER_RESERVE_SECONDS || this.power.spare >= w;
+  }
+
+  /** Jobs at powered workstations are only taken when there is power for them. */
+  private opPowered(o: Order): boolean {
+    if (o.task !== 'print' && o.task !== 'cook') return true;
+    const b = this.buildings.get(o.buildingId);
+    if (!b || b.powered || this.canPower(BUILDS[b.kind].powerUse ?? 0)) return true;
+    this.powerBlocked = true;
+    return false;
+  }
+
+  // ------------------------------------------------------------------ light
+
+  private rebuildLight(): void {
+    this.lightDirty = false;
+    const lamps: number[] = [];
+    for (const b of this.buildings.ofKind('lamp')) if (b.powered) lamps.push(this.grid.idx(b.x, b.y));
+    this.light.rebuild(this.grid, lamps);
+  }
+
+  /** Grid edits within a lamp's radius change what it lights. */
+  private lightTouched(rects: Rect[]): boolean {
+    const R = LAMP_RADIUS + 1;
+    for (const b of this.buildings.ofKind('lamp')) {
+      if (!b.powered) continue;
+      for (const r of rects) {
+        if (r.x1 >= b.x - R && r.x0 <= b.x + R && r.y1 >= b.y - R && r.y0 <= b.y + R) return true;
+      }
+    }
+    return false;
   }
 
   // ------------------------------------------------------------------ jobs
@@ -332,6 +570,7 @@ export class World {
               if (o.unreach && o.unreach.get(rid) === rver) continue;
               if (o.deferUntil > this.tick) continue;
               if (this.waitsForBelow(o)) continue;
+              if (o.kind === 'operate' && !this.opPowered(o)) continue;
               if (this.needsPayment(o) && !this.canAfford(orderCost(o))) {
                 this.buildsWaiting = true;
                 continue;
@@ -540,6 +779,7 @@ export class World {
     g.dirty = [];
     for (const r of rects) this.regions.markRect(r);
     this.regions.update();
+    if (!this.lightDirty && this.lightTouched(rects)) this.lightDirty = true;
     this.refreshOrdersNear(rects);
     for (const c of this.colonists) {
       if (c.state !== 'moving' || !c.path) continue;
@@ -648,9 +888,11 @@ export class World {
     const n = c.needs;
     const t = c.needTask;
     const sleeping = c.state === 'using' && t?.kind === 'sleep';
+    const cranking = c.state === 'working' && c.job?.task === 'crank';
     for (const k of NEEDS) {
       if (k === 'sleep' && sleeping) continue;
-      n[k] = Math.max(0, n[k] - NEED_DEFS[k].decay * DT);
+      const drain = cranking && (k === 'hunger' || k === 'sleep') ? CRANK_DRAIN : 1;
+      n[k] = Math.max(0, n[k] - NEED_DEFS[k].decay * drain * DT);
     }
     if (sleeping) {
       const rate = BED_SLEEP_RATE * (t!.buildingId >= 0 ? 1 : FLOOR_SLEEP_FACTOR);
@@ -729,10 +971,11 @@ export class World {
    * Sleep and eating fall back to the floor / standing up when there is no building.
    */
   private startNeed(c: Colonist, kind: NeedTaskKind): boolean {
-    if (kind === 'eat' && this.resources.food < 1) {
+    const raw = kind === 'eat' && this.resources.food < 1 ? this.rawPortion() : null;
+    if (kind === 'eat' && this.resources.food < 1 && !raw) {
       c.needRetryAt = this.tick + NEED_RETRY_TICKS;
-      if (c.needs.hunger < NEED_DEFS.hunger.urgent && this.tick % 600 < NEED_CHECK_TICKS) {
-        this.events.push({ type: 'needFail', colonistId: c.id, name: c.name, text: 'is hungry and there are no meals' });
+      if (c.needs.hunger < NEED_DEFS.hunger.urgent && this.tick % 600 < NEED_RETRY_TICKS) {
+        this.events.push({ type: 'needFail', colonistId: c.id, name: c.name, text: 'is hungry and there is no food' });
       }
       return false;
     }
@@ -740,7 +983,7 @@ export class World {
     const target = bkind ? this.findNeedBuilding(c, bkind) : null;
     if (!target && (kind === 'toilet' || kind === 'sink' || kind === 'shower')) {
       c.needRetryAt = this.tick + NEED_RETRY_TICKS;
-      if (kind === 'toilet' && c.needs.bladder < NEED_DEFS.bladder.urgent && this.tick % 600 < NEED_CHECK_TICKS) {
+      if (kind === 'toilet' && c.needs.bladder < NEED_DEFS.bladder.urgent && this.tick % 600 < NEED_RETRY_TICKS) {
         this.events.push({ type: 'needFail', colonistId: c.id, name: c.name, text: 'needs a toilet and can\'t reach one' });
       }
       return false;
@@ -757,14 +1000,28 @@ export class World {
     c.goal = 'need';
     if (target) {
       target.b.users[target.slot] = c.id;
-      c.needTask = { kind, buildingId: target.b.id, slot: target.slot, timer: 0 };
+      c.needTask = { kind, buildingId: target.b.id, slot: target.slot, timer: 0, raw };
       this.requestPath(c, [useCell(this.grid, target.b, target.slot)]);
     } else {
       // floor nap / eat standing up, right here
-      c.needTask = { kind, buildingId: -1, slot: 0, timer: 0 };
+      c.needTask = { kind, buildingId: -1, slot: 0, timer: 0, raw };
       this.beginUse(c);
     }
     return true;
+  }
+
+  /** No meals: the crop with the most raw portions in stock, if any. */
+  private rawPortion(): CropId | null {
+    let best: CropId | null = null;
+    let bestN = 0;
+    for (const k of CROP_LIST) {
+      const n = Math.floor(this.resources[k] / CROPS[k].perMeal);
+      if (n > bestN) {
+        bestN = n;
+        best = k;
+      }
+    }
+    return best;
   }
 
   private repathToNeed(c: Colonist): void {
@@ -793,11 +1050,18 @@ export class World {
       }
     }
     if (t.kind === 'eat') {
-      if (this.resources.food < 1) {
-        this.abandonNeed(c, true);
-        return;
+      // a meal if there is one by now, otherwise the raw portion planned (or any)
+      if (this.resources.food >= 1) {
+        t.raw = null;
+        this.resources.food -= 1;
+      } else {
+        if (!t.raw || this.resources[t.raw] < CROPS[t.raw].perMeal) t.raw = this.rawPortion();
+        if (!t.raw) {
+          this.abandonNeed(c, true);
+          return;
+        }
+        this.resources[t.raw] -= CROPS[t.raw].perMeal;
       }
-      this.resources.food -= 1;
     }
     t.timer = 0;
     c.state = 'using';
@@ -806,7 +1070,7 @@ export class World {
   private useDuration(c: Colonist): number {
     const t = c.needTask!;
     switch (t.kind) {
-      case 'eat': return t.buildingId >= 0 ? EAT_TIME_TABLE : EAT_TIME_STANDING;
+      case 'eat': return (t.buildingId >= 0 ? EAT_TIME_TABLE : EAT_TIME_STANDING) * (t.raw ? RAW_EAT_FACTOR : 1);
       case 'toilet': return TOILET_TIME;
       case 'sink': return SINK_TIME;
       case 'shower': return SHOWER_TIME;
@@ -844,7 +1108,7 @@ export class World {
     const t = c.needTask!;
     const n = c.needs;
     switch (t.kind) {
-      case 'eat': n.hunger = 100; break;
+      case 'eat': n.hunger = t.raw ? Math.min(100, n.hunger + RAW_HUNGER) : 100; break;
       case 'toilet':
         n.bladder = 100;
         c.bladderHold = 0;
@@ -1183,13 +1447,30 @@ export class World {
       return;
     }
     c.phase += DT * 6;
-    const speed = c.needs.hygiene < DIRTY_THRESHOLD ? DIRTY_WORK_SPEED : 1;
+    const speed = (c.needs.hygiene < DIRTY_THRESHOLD ? DIRTY_WORK_SPEED : 1) *
+      (this.light.lights(g, c.cell) ? LIGHT_WORK_BONUS : 1);
 
     // Phase 1 (tile builds on natural tiles): dig the tile out.
     if (needsDig(g, o)) {
       o.digProgress += DT * speed;
       if (o.digProgress >= o.digWork) this.digOut(o.x, o.y);
       return;
+    }
+
+    if (o.kind === 'operate') {
+      const b = this.buildings.get(o.buildingId)!;
+      b.busyTick = this.tick; // a powered workstation draws power while someone works at it
+      if (o.task === 'crank') b.crankTicks++;
+      else if ((BUILDS[b.kind].powerUse ?? 0) > 0 && !b.powered) {
+        // no power (yet): wait a moment, then leave it for later (maybe someone has to crank)
+        if (++o.waitTicks > POWER_WAIT * TICK_HZ) {
+          o.waitTicks = 0;
+          o.deferUntil = this.tick + IDLE_RETRY_MAX;
+          this.powerBlocked = true;
+          this.dropJob(c, true);
+        }
+        return;
+      }
     }
 
     if ((o.kind === 'build' || o.kind === 'operate') && o.progress === 0) {
@@ -1454,10 +1735,20 @@ export class World {
           this.refund((wasStair ? BUILDS.stairs : BUILDS.wall).cost, DECONSTRUCT_REFUND);
         }
         break;
-      case 'operate':
-        this.resources.food += 1;
-        this.printerOrders.delete(o.buildingId);
+      case 'operate': {
+        const b = this.buildings.get(o.buildingId)!;
+        if (o.task === 'print' || o.task === 'cook') this.resources.food += 1;
+        else if (o.task === 'sow') {
+          b.planted = true;
+          b.growth = 0;
+        } else if (o.task === 'harvest') {
+          this.resources[b.crop] += CROPS[b.crop].yield;
+          b.planted = false;
+          b.growth = 0;
+        }
+        if (this.opOrders.get(b.id) === o) this.opOrders.delete(b.id);
         break;
+      }
     }
     this.orders.remove(o);
     c.job = null;
@@ -1474,8 +1765,9 @@ export class World {
     for (const k of this.colonists) {
       if (k.needTask && k.needTask.buildingId === id) this.abandonNeed(k, false);
     }
-    const po = this.printerOrders.get(id);
+    const po = this.opOrders.get(id);
     if (po) this.cancelOrder(po);
+    if (b.kind === 'lamp' && b.powered) this.lightDirty = true;
     this.buildings.remove(b);
     if (refund) this.refund(BUILDS[b.kind].cost, DECONSTRUCT_REFUND);
   }

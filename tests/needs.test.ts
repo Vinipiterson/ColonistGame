@@ -211,14 +211,16 @@ describe('needs', () => {
 });
 
 describe('ration printer', () => {
-  it('keeps the meal stock up, spending matter', () => {
+  it('keeps the meal stock up, spending matter (and power: a colonist cranks first)', () => {
     const w = room();
     w.resources.food = 0;
     w.resources.matter = 1000;
     w.buildings.add('printer', 8, 3, false);
+    w.buildings.add('crank', 11, 3, false);
+    w.buildings.add('battery', 14, 3, false);
     const c = w.colonists[0];
     c.needs.hunger = 100;
-    runUntil(w, () => w.resources.food >= 4, 3000);
+    runUntil(w, () => w.resources.food >= 4, 4000);
     expect(w.resources.food).toBe(4); // target: max(4, 2 x colonists)
     w.run(400);
     expect(w.resources.food).toBe(4);
@@ -241,6 +243,8 @@ describe('survival', () => {
     w.buildings.add('shower', s.x + 5, s.y - 1, false);
     w.buildings.add('table', s.x + 6, s.y, false);
     w.buildings.add('printer', s.x + 8, s.y - 1, false);
+    w.buildings.add('crank', s.x - 3, s.y - 1, false);
+    w.buildings.add('battery', s.x + 1, s.y - 1, false);
     // some digging to keep them busy
     w.issue({ type: 'dig', rect: R(s.x + 10, s.y - 3, s.x + 20, s.y), priority: 5 });
     w.run(5 * DAY_SECONDS * SEC);

@@ -2,16 +2,16 @@
 // drags, R to flip stairs), fast-forward two days, and check the colony lives in it.
 // Usage: npm run build && node e2e/furnish.mjs   (screenshots in e2e/shots/)
 
-import { chromium } from '@playwright/test';
-import { existsSync, mkdirSync } from 'node:fs';
+import { launchBrowser } from './launch.mjs';
+import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const exe = ['/opt/pw-browsers/chromium-1243/chrome-linux64/chrome'].find((p) => existsSync(p));
 const shots = resolve('e2e/shots');
 mkdirSync(shots, { recursive: true });
-const url = 'file://' + resolve('dist/index.html') + '?seed=20261023';
+const url = pathToFileURL(resolve('dist/index.html')).href + '?seed=20261023';
 
-const browser = await chromium.launch({ executablePath: exe });
+const browser = await launchBrowser();
 const page = await browser.newPage({ viewport: { width: 1366, height: 800 } });
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
@@ -38,7 +38,11 @@ async function drag(x0, y0, x1, y1) {
 }
 const click = (x, y) => drag(x, y, x, y);
 const run = (n) => page.evaluate((n) => window.__colony.world.run(n), n);
-const pick = async (kind) => page.click(`.build-btn[data-build="${kind}"]`);
+const pick = async (kind) => {
+  const cat = await page.getAttribute(`.build-btn[data-build="${kind}"]`, 'data-cat');
+  await page.click(`.btab[data-cat="${cat}"]`);
+  await page.click(`.build-btn[data-build="${kind}"]`);
+};
 
 await page.evaluate(() => {
   const { world, renderer } = window.__colony;
@@ -55,7 +59,7 @@ await drag(s.x - 22, s.y - 6, s.x - 14, s.y - 3);
 
 // Furniture through the build bar
 await page.keyboard.press('KeyB');
-check(await page.isVisible('.bgroup-title'), 'build bar shows Structure / Furniture groups');
+check(await page.isVisible('.btab'), 'build bar shows category tabs');
 await pick('bed');
 await page.mouse.move(...Object.values(await tileToScreen(s.x - 8, s.y)));
 await page.waitForTimeout(100);
@@ -71,6 +75,11 @@ await pick('table');
 await click(s.x + 6, s.y);
 await pick('printer');
 await click(s.x + 8, s.y);
+// the printer needs power: a manual generator and a battery
+await pick('crank');
+await click(s.x - 3, s.y);
+await pick('battery');
+await click(s.x + 2, s.y);
 // a wall with a door in it, splitting the chamber
 await pick('wall');
 await drag(s.x - 4, s.y - 3, s.x - 4, s.y - 2);
@@ -85,7 +94,7 @@ for (let k = 0; k < 3; k++) await click(s.x - 11 - k, s.y - k);
 await page.keyboard.press('KeyR');
 await run(1);
 const orders = await page.evaluate(() => [...window.__colony.world.orders.all()].map((o) => o.build ?? o.kind));
-check(['bed', 'toilet', 'sink', 'shower', 'table', 'printer', 'door'].every((k) => orders.includes(k)), `all furniture orders placed (${orders.filter((o) => o !== 'dig').join(', ')})`);
+check(['bed', 'toilet', 'sink', 'shower', 'table', 'printer', 'door', 'crank', 'battery'].every((k) => orders.includes(k)), `all furniture orders placed (${orders.filter((o) => o !== 'dig').join(', ')})`);
 check(orders.filter((o) => o === 'bed').length === 2, 'dragging places two beds side by side');
 await page.screenshot({ path: `${shots}/m2-02-blueprints.png` });
 
@@ -104,7 +113,7 @@ const built = await page.evaluate(() => {
   return { k, stairs, left: [...w.orders.all()].filter((o) => o.kind === 'build').length };
 });
 check(built.left === 0, `everything built (${built.left} build orders left)`);
-check(built.k.bed === 2 && built.k.printer === 1 && built.k.door === 1, `buildings exist ${JSON.stringify(built.k)}`);
+check(built.k.bed === 2 && built.k.printer === 1 && built.k.door === 1 && built.k.crank === 1, `buildings exist ${JSON.stringify(built.k)}`);
 check(built.stairs.length === 3 && built.stairs.every((d) => d === 0), `3 stair blocks rising left (${built.stairs})`);
 
 // Two in-game days
