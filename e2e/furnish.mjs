@@ -47,6 +47,7 @@ const pick = async (kind) => {
 await page.evaluate(() => {
   const { world, renderer } = window.__colony;
   world.resources.matter = 3000;
+  world.resources.coal = 100; // batteries cost coal too
   // the shower and battery need research (driven through the UI in farm.mjs)
   world.completeResearch('showers');
   world.completeResearch('batteries');

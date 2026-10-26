@@ -21,7 +21,10 @@ import {
   type ResourceId, BUILD_RESEARCH, CLEAN_PRIORITY, CLEAN_WORK, CROP_RESEARCH, GROW_LAMP_BONUS, GROW_LAMP_W,
   OUTHOUSE_USES, RESEARCH, RESEARCH_LIST, RESEARCH_WORK, STATION_TIER, type ResearchId, ADV_RESEARCH_LEVEL,
   APTITUDE, FOOD_SHORT_BONUS, LOVE_CHANCE, MAX_PRIORITY_BONUS, REFUEL_BELOW, REFUEL_WORK, SKILLS, SKILL_LABEL,
-  SKILL_SPEED_PER_LEVEL, TWO_LIKES_CHANCE, levelXp, type SkillId,
+  SKILL_SPEED_PER_LEVEL, TWO_LIKES_CHANCE, levelXp, type SkillId, BARRACKS_SLEEP_BONUS, BASE_MOOD, BREAK_MOOD,
+  BREAK_SECONDS, DAY_SECONDS, FARM_GROWTH_BONUS, HAPPY_MOOD, HAPPY_SPEED, LAB_RESEARCH_BONUS, MOODLETS,
+  NICE_ROOM_FACTOR, SICK_CHANCE_PER_DAY, SICK_SECONDS, SICK_SPEED, SORE_BACK_SPEED, UNHAPPY_MOOD, UNHAPPY_SPEED,
+  type MoodletId, type RoomType,
 } from './defs';
 import {
   BuildingStore, buildingPlacements, canPlaceBuilding, freeSlot, slotUsable, useCell, type Building,
@@ -30,6 +33,7 @@ import { Colonist, NAMES, TINTS, type NeedTaskKind } from './colonist';
 import { normRect, type Command, type SimEvent } from './commands';
 import { Grid, type Rect } from './grid';
 import { LightMap } from './light';
+import { RoomMap } from './rooms';
 import { MAX_NEIGHBORS, Move, canOccupy, canStand, edgeDuration, edgeValid, landingY, neighbors } from './nav';
 import {
   JOB_CHUNK, OrderStore, canPlaceBuild, canPlaceDeconstruct, canPlaceDig, hasWorkPositions, inReach,
@@ -99,6 +103,7 @@ export class World {
   readonly buildings: BuildingStore;
   readonly orders: OrderStore;
   readonly light: LightMap;
+  readonly rooms: RoomMap;
   readonly rng: Rng;
   /** Colonist aptitudes only (keeps the main stream unchanged by them). */
   private readonly aptRng: Rng;
@@ -126,6 +131,8 @@ export class World {
   /** A powered workstation job was skipped for lack of power since the last machine update. */
   private powerBlocked = false;
   private lightDirty = false;
+  /** Grid edits since rooms were last updated (buildings keep their own list). */
+  private roomRects: Rect[] = [];
   private nc = new Int32Array(MAX_NEIGHBORS);
   private nt = new Uint8Array(MAX_NEIGHBORS);
   private nk = new Float32Array(MAX_NEIGHBORS);
@@ -148,6 +155,8 @@ export class World {
     this.buildings = new BuildingStore(grid);
     this.orders = new OrderStore(grid, this.buildings);
     this.light = new LightMap(grid);
+    this.rooms = new RoomMap(grid, this.buildings);
+    this.rooms.update([{ x0: 0, y0: 0, x1: grid.w - 1, y1: grid.h - 1 }]);
     grid.dirty.length = 0;
   }
 
@@ -214,13 +223,14 @@ export class World {
       this.wakeIdle = false;
       this.buildsWaiting = false;
       for (const c of this.colonists) {
-        if (c.state === 'idle') {
+        if (c.state === 'idle' && !c.onBreak) {
           c.retryAt = this.tick;
           c.failCount = 0;
         }
       }
     }
     if (this.tick % POWER_TICKS === 0) {
+      this.updateRooms();
       this.updatePower();
       this.updatePlanters();
       this.manageMachines();
@@ -368,7 +378,7 @@ export class World {
 
   /** Priority for a building's automatic job: its own, raised for meals while they run short. */
   private opPriority(b: Building, task: OperateTask): number {
-    if ((task === 'cook' || task === 'print') && b.priority < EMERGENCY && this.resources.food < this.aliveCount) {
+    if ((task === 'cook' || task === 'print') && b.priority < EMERGENCY && this.mealsInStock < this.aliveCount) {
       return Math.min(9, b.priority + FOOD_SHORT_BONUS);
     }
     return b.priority;
@@ -434,7 +444,7 @@ export class World {
       this.cancelOrder(o);
       return false;
     }
-    r.progress[id] = (r.progress[id] ?? 0) + pts;
+    r.progress[id] = (r.progress[id] ?? 0) + pts * (this.roomTypeOf(b) === 'lab' ? LAB_RESEARCH_BONUS : 1);
     if (r.progress[id]! < RESEARCH[id].cost) return true;
     this.completeResearch(id); // cancels the research jobs, this one included
     return false;
@@ -456,6 +466,11 @@ export class World {
 
   // ------------------------------------------------------------------ machines: food, farms, cranking
 
+  /** Rations + cooked meals. */
+  get mealsInStock(): number {
+    return this.resources.food + this.resources.meal;
+  }
+
   /** Meals the colony tries to keep in stock. */
   get foodTarget(): number {
     return Math.max(4, 2 * this.aliveCount);
@@ -470,7 +485,7 @@ export class World {
    */
   private manageMachines(): void {
     for (const [id, o] of this.opOrders) if (o.removed) this.opOrders.delete(id);
-    let planned = this.resources.food;
+    let planned = this.mealsInStock;
     const reserved: Cost = {};
     for (const o of this.opOrders.values()) {
       if (o.task !== 'cook' && o.task !== 'print') continue;
@@ -564,7 +579,8 @@ export class World {
       const crop = CROPS[b.crop];
       const lit = b.lamp && b.powered;
       if (crop.needsLamp && !lit) continue;
-      b.growth = Math.min(1, b.growth + (secs * (lit ? GROW_LAMP_BONUS : 1)) / crop.growSeconds);
+      const farm = this.roomTypeOf(b) === 'farm' ? FARM_GROWTH_BONUS : 1;
+      b.growth = Math.min(1, b.growth + (secs * (lit ? GROW_LAMP_BONUS : 1) * farm) / crop.growSeconds);
     }
   }
 
@@ -665,6 +681,76 @@ export class World {
     if (!b || b.powered || this.canPower(BUILDS[b.kind].powerUse ?? 0)) return true;
     this.powerBlocked = true;
     return false;
+  }
+
+  // ------------------------------------------------------------------ rooms
+
+  private updateRooms(): void {
+    const rects = this.roomRects.concat(this.buildings.changed);
+    if (!rects.length) return;
+    this.roomRects = [];
+    this.buildings.changed = [];
+    this.rooms.update(rects);
+  }
+
+  roomTypeOf(b: Building): RoomType | null {
+    return this.rooms.ofBuilding(b)?.type ?? null;
+  }
+
+  /** Room moodlet for using a building in a room of this type (doubled when the room is Nice). */
+  private roomMoodlet(c: Colonist, b: Building | undefined, type: RoomType, id: MoodletId): void {
+    const room = b ? this.rooms.ofBuilding(b) : undefined;
+    if (room && room.type === type) this.addMoodlet(c, id, room.nice ? NICE_ROOM_FACTOR : 1);
+  }
+
+  // ------------------------------------------------------------------ happiness
+
+  addMoodlet(c: Colonist, id: MoodletId, factor = 1): void {
+    const d = MOODLETS[id];
+    c.moodlets.set(id, { value: d.value * factor, until: d.duration > 0 ? this.tick + d.duration * TICK_HZ : Infinity });
+  }
+
+  /**
+   * Once a second per colonist: expire moodlets, apply the condition ones (smelly, sick), roll for
+   * a stomach bug while dirty, recompute mood, and start a stress break when it bottoms out.
+   */
+  private updateMood(c: Colonist): void {
+    for (const [id, m] of c.moodlets) if (m.until <= this.tick) c.moodlets.delete(id);
+    const dirty = c.needs.hygiene < DIRTY_THRESHOLD;
+    if (dirty && c.sick <= 0 && this.rng.next() < (SICK_CHANCE_PER_DAY / DAY_SECONDS) * NEED_CHECK_TICKS * DT) {
+      c.sick = SICK_SECONDS;
+      this.events.push({ type: 'needFail', colonistId: c.id, name: c.name, text: 'caught a stomach bug (too dirty)' });
+    }
+    if (dirty) this.addMoodlet(c, 'smelly');
+    else c.moodlets.delete('smelly');
+    if (c.sick > 0) this.addMoodlet(c, 'sick');
+    else c.moodlets.delete('sick');
+    let mood = BASE_MOOD;
+    for (const m of c.moodlets.values()) mood += m.value;
+    c.mood = Math.max(0, Math.min(100, mood));
+
+    if (c.onBreak && this.tick >= c.breakUntil) {
+      c.onBreak = false;
+      c.retryAt = this.tick;
+    }
+    if (!c.onBreak && c.mood < BREAK_MOOD && (c.state === 'idle' || c.state === 'pathing' || c.state === 'moving' || c.state === 'working') && c.goal !== 'need') {
+      // stress break: drop the job, stand around for a game hour, then feel a bit better
+      if (c.job) this.dropJob(c, false);
+      if (c.goal === 'evacuate') return;
+      c.onBreak = true;
+      c.breakUntil = this.tick + BREAK_SECONDS * TICK_HZ;
+      c.retryAt = c.breakUntil;
+      this.addMoodlet(c, 'vented');
+      this.events.push({ type: 'needFail', colonistId: c.id, name: c.name, text: 'is having a stress break' });
+    }
+  }
+
+  /** Work speed from mood, a sore back and sickness. */
+  private moodSpeed(c: Colonist): number {
+    let s = c.mood >= HAPPY_MOOD ? HAPPY_SPEED : c.mood < UNHAPPY_MOOD ? UNHAPPY_SPEED : 1;
+    if (c.moodlets.has('soreback')) s *= SORE_BACK_SPEED;
+    if (c.sick > 0) s *= SICK_SPEED;
+    return s;
   }
 
   // ------------------------------------------------------------------ light
@@ -817,7 +903,7 @@ export class World {
   private runAssignment(): void {
     // enqueue idle colonists whose retry time has come
     for (const c of this.colonists) {
-      if (c.state === 'idle' && !c.inQueue && this.tick >= c.retryAt) {
+      if (c.state === 'idle' && !c.inQueue && !c.onBreak && this.tick >= c.retryAt) {
         c.inQueue = true;
         this.idleQueue.push(c);
       }
@@ -850,7 +936,7 @@ export class World {
     if (!this.orders.hasUnclaimedEmergency()) return;
     for (const c of this.colonists) {
       if (c.state === 'dead' || c.state === 'falling' || c.state === 'scrambling' || c.state === 'using') continue;
-      if (c.goal === 'need') continue;
+      if (c.goal === 'need' || c.onBreak) continue;
       if (c.job && c.job.priority === EMERGENCY) continue;
       const found = this.findJob(c, EMERGENCY);
       if (!found) continue;
@@ -971,6 +1057,7 @@ export class World {
     g.dirty = [];
     for (const r of rects) this.regions.markRect(r);
     this.regions.update();
+    for (const r of rects) this.roomRects.push(r);
     if (!this.lightDirty && this.lightTouched(rects)) this.lightDirty = true;
     this.refreshOrdersNear(rects);
     for (const c of this.colonists) {
@@ -1052,7 +1139,10 @@ export class World {
         this.unstick(c);
       }
     }
-    if ((this.tick + c.id) % NEED_CHECK_TICKS === 0) this.checkNeeds(c);
+    if ((this.tick + c.id) % NEED_CHECK_TICKS === 0) {
+      this.updateMood(c);
+      this.checkNeeds(c);
+    }
     if ((this.tick + c.id) % STUCK_CHECK_TICKS === 0) this.checkStuck(c);
     switch (c.state) {
       case 'idle':
@@ -1087,10 +1177,13 @@ export class World {
       n[k] = Math.max(0, n[k] - NEED_DEFS[k].decay * drain * DT);
     }
     if (sleeping) {
-      const rate = BED_SLEEP_RATE * (t!.buildingId >= 0 ? 1 : FLOOR_SLEEP_FACTOR);
+      const bed = t!.buildingId >= 0 ? this.buildings.get(t!.buildingId) : undefined;
+      const rate = BED_SLEEP_RATE * (bed ? (this.roomTypeOf(bed) === 'barracks' ? BARRACKS_SLEEP_BONUS : 1) : FLOOR_SLEEP_FACTOR);
       n.sleep = Math.min(100, n.sleep + rate * DT);
       c.health = Math.min(100, c.health + SLEEP_HEAL * DT);
     }
+    // a stomach bug wears off, twice as fast in a bed
+    if (c.sick > 0) c.sick = Math.max(0, c.sick - DT * (sleeping && t!.buildingId >= 0 ? 2 : 1));
     if (n.hunger <= 0) {
       c.health -= STARVE_DAMAGE * DT;
       if (c.health <= 0) return this.kill(c, 'starved');
@@ -1166,8 +1259,8 @@ export class World {
    * Sleep and eating fall back to the floor / standing up when there is no building.
    */
   private startNeed(c: Colonist, kind: NeedTaskKind): boolean {
-    const raw = kind === 'eat' && this.resources.food < 1 ? this.rawPortion() : null;
-    if (kind === 'eat' && this.resources.food < 1 && !raw) {
+    const raw = kind === 'eat' && this.mealsInStock < 1 ? this.rawPortion() : null;
+    if (kind === 'eat' && this.mealsInStock < 1 && !raw) {
       c.needRetryAt = this.tick + NEED_RETRY_TICKS;
       if (c.needs.hunger < NEED_DEFS.hunger.urgent && this.tick % 600 < NEED_RETRY_TICKS) {
         this.events.push({ type: 'needFail', colonistId: c.id, name: c.name, text: 'is hungry and there is no food' });
@@ -1194,11 +1287,11 @@ export class World {
     c.goal = 'need';
     if (target) {
       target.b.users[target.slot] = c.id;
-      c.needTask = { kind, buildingId: target.b.id, slot: target.slot, timer: 0, raw };
+      c.needTask = { kind, buildingId: target.b.id, slot: target.slot, timer: 0, raw, cooked: false };
       this.requestPath(c, [useCell(this.grid, target.b, target.slot)]);
     } else {
       // floor nap / eat standing up, right here
-      c.needTask = { kind, buildingId: -1, slot: 0, timer: 0, raw };
+      c.needTask = { kind, buildingId: -1, slot: 0, timer: 0, raw, cooked: false };
       this.beginUse(c);
     }
     return true;
@@ -1244,8 +1337,12 @@ export class World {
       }
     }
     if (t.kind === 'eat') {
-      // a meal if there is one by now, otherwise the raw portion planned (or any)
-      if (this.resources.food >= 1) {
+      // the best there is by now: a cooked meal, a ration, else the raw portion planned (or any)
+      if (this.resources.meal >= 1) {
+        t.raw = null;
+        t.cooked = true;
+        this.resources.meal -= 1;
+      } else if (this.resources.food >= 1) {
         t.raw = null;
         this.resources.food -= 1;
       } else {
@@ -1301,20 +1398,35 @@ export class World {
   private finishNeed(c: Colonist): void {
     const t = c.needTask!;
     const n = c.needs;
+    const b = t.buildingId >= 0 ? this.buildings.get(t.buildingId) : undefined;
     switch (t.kind) {
-      case 'eat': n.hunger = t.raw ? Math.min(100, n.hunger + RAW_HUNGER) : 100; break;
+      case 'eat':
+        n.hunger = t.raw ? Math.min(100, n.hunger + RAW_HUNGER) : 100;
+        if (t.raw) this.addMoodlet(c, 'raw');
+        else if (t.cooked) this.addMoodlet(c, 'cooked');
+        if (b) {
+          this.addMoodlet(c, 'table');
+          this.roomMoodlet(c, b, 'messhall', 'messhall');
+        } else this.addMoodlet(c, 'standing');
+        break;
       case 'toilet': {
         n.bladder = 100;
         c.bladderHold = 0;
-        const b = this.buildings.get(t.buildingId);
         if (b && b.kind === 'toilet' && ++b.uses >= OUTHOUSE_USES) b.dirty = true;
+        this.roomMoodlet(c, b, 'washroom', 'washroom');
         if (this.buildings.ofKind('sink').size > 0) c.sinkPending = true;
         else n.hygiene = Math.max(0, n.hygiene + SKIP_SINK_HYGIENE);
         break;
       }
       case 'sink': n.hygiene = Math.min(100, n.hygiene + SINK_HYGIENE); break;
-      case 'shower': n.hygiene = 100; break;
-      case 'sleep': break;
+      case 'shower':
+        n.hygiene = 100;
+        this.roomMoodlet(c, b, 'washroom', 'washroom');
+        break;
+      case 'sleep':
+        if (!b) this.addMoodlet(c, 'soreback');
+        else this.roomMoodlet(c, b, 'barracks', 'barracks');
+        break;
     }
     this.releaseNeedBuilding(c);
     c.needTask = null;
@@ -1534,6 +1646,7 @@ export class World {
     c.health = 0;
     c.deathCause = cause;
     this.events.push({ type: 'death', colonistId: c.id, name: c.name, cause });
+    for (const k of this.colonists) if (k.alive) this.addMoodlet(k, 'death');
     if (this.aliveCount === 0) {
       this.gameOver = true;
       this.events.push({ type: 'gameOver' });
@@ -1647,7 +1760,7 @@ export class World {
     const skill = orderSkill(o);
     const speed = (c.needs.hygiene < DIRTY_THRESHOLD ? DIRTY_WORK_SPEED : 1) *
       (this.light.lights(g, c.cell) ? LIGHT_WORK_BONUS : 1) *
-      (1 + SKILL_SPEED_PER_LEVEL * c.level(skill));
+      (1 + SKILL_SPEED_PER_LEVEL * c.level(skill)) * this.moodSpeed(c);
 
     // Phase 1 (tile builds on natural tiles): dig the tile out.
     if (needsDig(g, o)) {
@@ -1918,6 +2031,7 @@ export class World {
   private completeOrder(c: Colonist, o: Order): void {
     const g = this.grid;
     const x = o.x, y = o.y;
+    if (c.aptitude[orderSkill(o)] === 'love') this.addMoodlet(c, 'loved');
     switch (o.kind) {
       case 'dig':
         this.digOut(x, y);
@@ -1947,7 +2061,8 @@ export class World {
         break;
       case 'operate': {
         const b = this.buildings.get(o.buildingId)!;
-        if (o.task === 'print' || o.task === 'cook') this.resources.food += 1;
+        if (o.task === 'print') this.resources.food += 1;
+        else if (o.task === 'cook') this.resources.meal += 1;
         else if (o.task === 'sow') {
           b.planted = true;
           b.growth = 0;
@@ -1958,6 +2073,7 @@ export class World {
         } else if (o.task === 'clean') {
           b.uses = 0;
           b.dirty = false;
+          this.addMoodlet(c, 'cleaned');
         } else if (o.task === 'refuel') {
           const f = BUILDS[b.kind].fuel!;
           b.tank = Math.min(f.tank, b.tank + (o.opCost[f.res] ?? 0));

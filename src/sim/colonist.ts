@@ -3,7 +3,8 @@
 // not in property access, and objects keep the AI readable.
 
 import {
-  APTITUDE, MAX_HEALTH, SKILLS, skillLevel, type Aptitude, type CropId, type NeedId, type SkillId,
+  APTITUDE, BASE_MOOD, MAX_HEALTH, SKILLS, skillLevel, type Aptitude, type CropId, type MoodletId, type NeedId,
+  type SkillId,
 } from './defs';
 import type { OperateTask, Order } from './orders';
 import type { Path, PathRequest } from './pathfinder';
@@ -24,6 +25,14 @@ export interface NeedTask {
   timer: number;
   /** Eating: no meals, so a raw portion of this crop (null = a meal). */
   raw: CropId | null;
+  /** Eating: a cooked meal (else a ration or raw crops). */
+  cooked: boolean;
+}
+
+export interface ActiveMoodlet {
+  value: number;
+  /** Tick it expires (Infinity: condition moodlets, removed when the condition ends). */
+  until: number;
 }
 
 export const NAMES = [
@@ -55,6 +64,15 @@ export class Colonist {
   /** Skill XP (level = skillLevel(xp)), and how the colonist feels about each skill (born with it). */
   xp = Object.fromEntries(SKILLS.map((s) => [s, 0])) as Record<SkillId, number>;
   aptitude: Partial<Record<SkillId, Aptitude>> = {};
+
+  /** Happiness 0..100 (BASE_MOOD + moodlets), recomputed once a second. */
+  mood = BASE_MOOD;
+  moodlets = new Map<MoodletId, ActiveMoodlet>();
+  /** Stress break: not taking jobs until this tick. */
+  breakUntil = 0;
+  onBreak = false;
+  /** Stomach bug: seconds left (0 = healthy). */
+  sick = 0;
 
   /** 100 = fully satisfied, 0 = desperate. */
   needs: Record<NeedId, number> = { hunger: 100, sleep: 100, bladder: 100, hygiene: 100 };
@@ -141,7 +159,7 @@ export class Colonist {
       case 'dead': return `Dead (${this.deathCause ?? 'unknown'})`;
       case 'falling': return 'Falling!';
       case 'scrambling': return 'Losing footing!';
-      case 'idle': return 'Idle';
+      case 'idle': return this.onBreak ? 'Stress break' : 'Idle';
       case 'pathing': return 'Planning route';
       case 'moving':
         if (this.goal === 'evacuate') return 'Making room';

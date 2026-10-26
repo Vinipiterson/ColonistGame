@@ -1,6 +1,6 @@
 # Colony Game
 
-Side-view 2D tile colony sim (TypeScript + Canvas 2D). Milestone 4 (skills, likings, building priorities).
+Side-view 2D tile colony sim (TypeScript + Canvas 2D). Milestone 4b (rooms, happiness).
 
 **Play it:** https://vinipiterson.github.io/ColonistGame/ (deployed from `master` on every push)
 
@@ -21,10 +21,11 @@ Side-view 2D tile colony sim (TypeScript + Canvas 2D). Milestone 4 (skills, liki
   by side. R flips stairs and mirrors buildings. Most buildings and crops need research first.
 - Priority widget bottom-right, or keys 1-9; 0 = Emergency. The selection sticks until changed (default 6).
   Dragging the same tool over existing orders re-prioritises them.
-- Click a colonist for details (needs, skills: ★ like, ♥ love, ✕ hate), or a building for its
+- Click a colonist for details (needs, mood + moodlets, skills: ★ like, ♥ love, ✕ hate), or a building for its
   inspector (job priority, crop, grow lamp, on/off, status).
 - Drag the map (no tool), right/middle drag or WASD to pan; wheel or +/- to zoom.
-- Right-click or Esc leaves a tool. Space pauses.
+- Right-click or Esc leaves a tool (right-click mid-drag cancels the selection too). Space pauses.
+- V or the Rooms button shows rooms (walled with built walls/doors) and their type; decor makes them Nice.
 
 ## Layout
     src/sim/      pure deterministic simulation (no DOM)
@@ -37,10 +38,11 @@ Side-view 2D tile colony sim (TypeScript + Canvas 2D). Milestone 4 (skills, liki
       orders.ts     orders/jobs, spatial job index, placement rules, reach
       colonist.ts   colonist data
       light.ts      lamp light map (line of sight)
+      rooms.ts      room detection, types, decor
       world.ts      tick loop, commands, assignment, needs, power, farms, research, revalidation
       worldgen.ts   procedural world
     src/render/   canvas renderer (chunk cache, overlays, colonists) + art.ts (building art)
     src/ui/       input, HUD, research panel
-    tests/        vitest (nav, regions, sim scenarios, building, needs, farm/power, research, skills, benchmark)
+    tests/        vitest (nav, regions, sim scenarios, building, needs, farm/power, research, skills, rooms-mood, benchmark)
     e2e/          Playwright scripts
     docs/architecture.md  design decisions, architecture, milestones

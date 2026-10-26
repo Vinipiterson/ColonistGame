@@ -56,6 +56,27 @@ TypeScript (strict) + Canvas 2D, Vite (single-file build), Vitest (headless sim 
 - Light map (src/sim/light.ts): rebuilt only when a lamp's powered state changes or the grid changes near a lit lamp.
 - Inspector: clicking a building shows status + controls (crop, grow lamp, on/off) and issues `configure` commands.
 
+## Rooms + happiness (M4b)
+- Rooms (src/sim/rooms.ts): open cells closed off on every side by **built** walls, stair blocks or doors, 12–120 cells. Natural tiles (dirt, coal, bedrock) leak. Local updates once a second around grid edits and building changes; floods stop at the first natural tile or at 121 cells.
+- Types by contents: Laboratory (research station; research +10%), Farm (2+ planters; growth +20%), Barracks (beds, no workstation; sleep +25%, mood), Mess Hall (tables, no beds; mood), Washroom (toilet/sink/shower; mood), else Room. Nice = decor ≥ 0.5 per cell (Potted Plant 10, Painting 25): room moodlets ×2. Overlay: V / Rooms button.
+- Mood = 50 + moodlets (0–100), updated once a second. ≥70: +10% work; <30: −15%; <10: stress break (drops its job, takes none for a game hour, then "let off steam" +15).
+
+| Moodlet | Value | Lasts |
+|---|---|---|
+| Cooked meal / ration / raw crops | +6 / 0 / −8 | ½ day |
+| At a table / standing / in a mess hall | +3 / −3 / +4 | ½ day |
+| Slept in a barracks / sore back (floor) | +5 / −8 and −10% work | 1 day |
+| Nice washroom (toilet, shower) | +3 | ½ day |
+| Cleaned an outhouse | −4 | ½ day |
+| Did loved work | +2 | ¼ day |
+| A colonist died | −15 | 2 days |
+| Smelly (hygiene < 20) / stomach bug | −10 / −10 | while it lasts |
+
+- Stomach bug: while hygiene < 20, 30% chance per day; −30% work, lasts 1.5 days (twice as fast sleeping in a bed). Hygiene < 20 also keeps its −25% work speed.
+- Meals: printer → Rations (`food`), Cooking Station → Cooked meals (`meal`); both count toward the stock target; colonists eat cooked, then rations, then raw.
+- Batteries rebalanced: 10 kJ, 300 matter + 20 coal, leak 0.1%/s.
+- Right-click during a drag cancels the selection and leaves the tool (a second button pressed mid-drag arrives as a pointermove, so it's detected from `buttons`).
+
 ## Skills (M4)
 | Skill | Jobs |
 |---|---|
@@ -120,5 +141,5 @@ Thresholds per need: want (handle after the current job), urgent (drop the job, 
 3. DONE. Planters with three crops, raw crops + Cooking Station, raw eating; power pool with manual/coal generators, reactor, batteries, brownouts; powered printer; ceiling lamps with occluded light and a work bonus; building inspector; build bar tabs. 56 unit/scenario tests + 3 browser runs; benchmark ~0.65 ms/tick avg.
 3b. DONE. Research: Research / Advanced Research Stations, two-tier tree gating most buildings and crops, research panel; Outhouse that needs cleaning + Flush Toilet; planter grow lamp upgrade. 64 unit/scenario tests + 3 browser runs; benchmark ~0.65 ms/tick avg.
 4. DONE. Skills with XP/levels and likes/loves/hates (job pull, faster XP, never doing hated work); Research level gate on the Advanced station; per-building job priorities + Priority tool; generator fuel tanks + refuel jobs; locked buildings hidden from the build menu. 76 unit/scenario tests + 3 browser runs; benchmark ~0.85 ms/tick avg.
-4b. NEXT. Rooms + room bonuses (Barracks, Mess Hall, Farm).
-5. Arrivals + beacon, save/load, performance pass to 500 colonists.
+4b. DONE. Rooms (built walls, types, decor, bonuses, overlay) + happiness (moodlets, mood speed, stress breaks, stomach bugs, sore back), rations vs cooked meals, battery rebalance, right-click cancels drags. 87 unit/scenario tests + 3 browser runs; benchmark ~0.9 ms/tick avg.
+5. NEXT. Arrivals + beacon, save/load, performance pass to 500 colonists.

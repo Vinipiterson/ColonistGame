@@ -102,7 +102,7 @@ describe('planters and crops', () => {
 });
 
 describe('food', () => {
-  it('the Cooking Station turns crops into meals before the printer prints any', () => {
+  it('the Cooking Station turns crops into cooked meals before the printer prints any rations', () => {
     const w = room();
     w.resources.food = 0;
     w.resources.tuber = 4;
@@ -111,10 +111,12 @@ describe('food', () => {
     w.buildings.add('stove', 4, 3, false);
     w.buildings.add('printer', 8, 3, false);
     fueled(w.buildings.add('coalgen', 12, 3, false));
-    runFed(w, 120 * SEC, () => w.resources.food >= 4);
-    expect(w.resources.food).toBe(4); // target max(4, 2 x colonists)
-    expect(w.resources.tuber).toBe(0); // 2 meals from 4 tubers
-    expect(w.resources.matter).toBe(1000 - 2 * 100); // the printer made the other 2
+    runFed(w, 120 * SEC, () => w.mealsInStock >= 4);
+    expect(w.mealsInStock).toBe(4); // target max(4, 2 x colonists)
+    expect(w.resources.meal).toBe(2); // 2 cooked meals from 4 tubers
+    expect(w.resources.tuber).toBe(0);
+    expect(w.resources.food).toBe(2); // the printer made 2 rations
+    expect(w.resources.matter).toBe(1000 - 2 * 100);
   });
 
   it('with no meals, colonists eat a raw portion: less filling, slower', () => {
@@ -186,10 +188,10 @@ describe('power', () => {
     w.resources.radioactive = 10;
     const r = fueled(w.buildings.add('reactor', 3, 2, false));
     w.buildings.add('battery', 7, 3, false);
-    w.run(5 * SEC);
+    w.run(3 * SEC); // (a 10 kJ battery is full after ~4 s of 3 kW)
     expect(r.powered).toBe(true);
     expect(w.power.gen).toBe(3000);
-    expect(r.tank).toBeCloseTo(BUILDS.reactor.fuel!.tank - 0.01 * 5, 5);
+    expect(r.tank).toBeCloseTo(BUILDS.reactor.fuel!.tank - 0.01 * 3, 5);
   });
 
   it('brownout: consumers get power in building order until it runs out', () => {
@@ -240,7 +242,7 @@ describe('lamps and light', () => {
     expect(lamp.powered).toBe(false); // no power yet
     expect(w.light.level[cell(w, 3, 4)]).toBe(0);
     const bat = w.buildings.add('battery', 9, 3, false);
-    bat.charge = 20_000;
+    bat.charge = BUILDS.battery.capacity!;
     w.run(2 * SEC);
     expect(lamp.powered).toBe(true);
     expect(w.light.level[cell(w, 3, 4)]).toBeGreaterThan(0);
@@ -262,7 +264,7 @@ describe('lamps and light', () => {
       const w = litRoom();
       if (lit) {
         w.buildings.add('lamp', 3, 1, false);
-        w.buildings.add('battery', 9, 3, false).charge = 20_000;
+        w.buildings.add('battery', 9, 3, false).charge = BUILDS.battery.capacity!;
         w.run(2 * SEC);
       }
       w.issue({ type: 'dig', rect: R(4, 5), priority: 6 });

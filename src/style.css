@@ -94,10 +94,10 @@ body {
   position: absolute;
   top: var(--edge-t);
   left: var(--edge-l);
-  right: 270px;
+  right: 340px;
   width: max-content;
-  /* leave room for the speed / zoom buttons (top-right) */
-  max-width: calc(100% - 290px);
+  /* leave room for the speed / zoom / rooms buttons (top-right) */
+  max-width: calc(100% - 360px);
   display: flex;
   flex-wrap: wrap;
   gap: 4px 14px;
@@ -232,6 +232,37 @@ body {
 .bp-prio.em { background: #3d1c1c; border-color: #6a2b2b; }
 .bp-prio.active { border-color: var(--amber); background: #4a3620; color: #fff; }
 .bp-prio.em.active { border-color: var(--red); background: #8a1f1f; }
+
+/* colonist mood */
+.cp-mood {
+  display: grid;
+  gap: 3px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid #3d332c;
+}
+.cp-mood-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+.cp-moodlet {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+.cp-moodlet em {
+  font-style: normal;
+  font-family: var(--font-num);
+}
+.cp-moodlet.pos em { color: var(--good); }
+.cp-moodlet.neg em { color: var(--red); }
+.rooms-btn { font-size: 13px; }
+.hud-colonist {
+  /* stays clear of the priority widget (bottom-right); scrolls if needs + mood + skills don't fit */
+  max-height: calc(100vh - var(--edge-t) - 290px);
+  overflow-y: auto;
+}
 
 /* colonist skills */
 .cp-skills {

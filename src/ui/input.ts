@@ -4,7 +4,7 @@
 //   Left click (no tool)   -> select colonist (else building); left drag (no tool) -> pan
 //   Right click            -> leave the current tool (or cancel an in-progress drag)
 //   Right / middle drag    -> pan          Wheel or +/- -> zoom
-//   WASD / arrows pan, G/B/X/C/P tools, R flip/rotate, T research, Esc, 1-9 priority, 0 emergency, Space pause
+//   WASD / arrows pan, G/B/X/C/P tools, R flip/rotate, T research, V rooms, Esc, 1-9 priority, 0 emergency, Space pause
 
 import { buildingPlacements, canPlaceBuilding } from '../sim/buildings';
 import { normRect } from '../sim/commands';
@@ -46,9 +46,11 @@ export class ToolState {
   paused = false;
   /** Research panel open. */
   research = false;
+  /** Rooms overlay. */
+  rooms = false;
   listeners: (() => void)[] = [];
 
-  set(patch: Partial<Pick<ToolState, 'mode' | 'build' | 'priority' | 'speed' | 'paused' | 'flip' | 'research'>>): void {
+  set(patch: Partial<Pick<ToolState, 'mode' | 'build' | 'priority' | 'speed' | 'paused' | 'flip' | 'research' | 'rooms'>>): void {
     Object.assign(this, patch);
     if (patch.priority !== undefined) {
       try { localStorage.setItem(PRIORITY_KEY, String(patch.priority)); } catch { /* ignore */ }
@@ -74,7 +76,10 @@ export class Input {
     this.r = renderer;
     this.tools = tools;
     const cv = renderer.canvas;
-    cv.addEventListener('contextmenu', (e) => e.preventDefault());
+    cv.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (this.dragStart) this.cancelDrag();
+    });
     cv.addEventListener('pointerdown', (e) => this.down(e));
     window.addEventListener('pointermove', (e) => this.move(e));
     window.addEventListener('pointerup', (e) => this.up(e));
@@ -104,16 +109,26 @@ export class Input {
       this.updatePreview();
     } else if (e.button === 1 || e.button === 2) {
       if (e.button === 2 && this.dragStart) {
-        // right click while dragging cancels the drag
-        this.dragStart = this.dragEnd = null;
-        this.updatePreview();
+        // right click while dragging cancels the selection and leaves the tool
+        this.cancelDrag();
         return;
       }
       this.pan = { sx: e.clientX, sy: e.clientY, cx: this.r.cam.x, cy: this.r.cam.y, moved: false, button: e.button };
     }
   }
 
+  /** Right click during a drag: drop the selection and leave the tool. */
+  private cancelDrag(): void {
+    this.dragStart = this.dragEnd = null;
+    this.tools.set({ mode: 'select' });
+  }
+
   private move(e: PointerEvent): void {
+    // A second button pressed while dragging arrives as a pointermove (no pointerdown).
+    if (this.dragStart && e.buttons & 2) {
+      this.cancelDrag();
+      return;
+    }
     const rect = this.r.canvas.getBoundingClientRect();
     const inside = e.clientX >= rect.left && e.clientX < rect.right && e.clientY >= rect.top && e.clientY < rect.bottom;
     if (this.pan) {
@@ -195,6 +210,7 @@ export class Input {
     else if (e.code === 'KeyP') t.set({ mode: 'priority' });
     else if (e.code === 'KeyR') t.set({ flip: !t.flip });
     else if (e.code === 'KeyT') t.set({ research: !t.research });
+    else if (e.code === 'KeyV') t.set({ rooms: !t.rooms });
     else if (e.code === 'Equal' || e.code === 'NumpadAdd') this.zoomAt(1.25);
     else if (e.code === 'Minus' || e.code === 'NumpadSubtract') this.zoomAt(1 / 1.25);
     else if (e.code === 'Escape') {
@@ -229,6 +245,7 @@ export class Input {
     const g = this.world.grid;
     const dragging = !!(this.dragStart && this.dragEnd);
     this.r.showBuildingPriority = mode === 'priority';
+    this.r.showRooms = this.tools.rooms;
     if (mode === 'select' || (!dragging && !(mode === 'build' && this.hover))) {
       this.r.preview = null;
       return;

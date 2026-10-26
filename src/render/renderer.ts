@@ -6,7 +6,9 @@
 //   is visible.
 // - Drawing uses a tile-unit transform: 1 unit = 1 tile, scaled by the camera zoom.
 
-import { BUILDS, DIRTY_THRESHOLD, EMERGENCY, MAX_HEALTH, NEED_DEFS, Tile, type BuildKind } from '../sim/defs';
+import {
+  BUILDS, DIRTY_THRESHOLD, EMERGENCY, MAX_HEALTH, NEED_DEFS, ROOM_LABEL, Tile, type BuildKind, type RoomType,
+} from '../sim/defs';
 import type { Building } from '../sim/buildings';
 import type { Colonist } from '../sim/colonist';
 import type { Rect } from '../sim/grid';
@@ -56,6 +58,9 @@ const COLORS = {
 
 const BLUE = 'rgba(90,175,255,';
 const RED = 'rgba(255,110,110,';
+const ROOM_COLOR: Record<RoomType, string> = {
+  barracks: '#5aafff', messhall: '#f2a93b', washroom: '#6ec6ff', farm: '#7cfc9a', lab: '#c77dff', room: '#d8d0c4',
+};
 
 export class Renderer {
   readonly canvas: HTMLCanvasElement;
@@ -75,6 +80,8 @@ export class Renderer {
   selectedBuilding = -1;
   /** Priority tool active: show the priority of every work building. */
   showBuildingPriority = false;
+  /** Rooms overlay (V): tint rooms by type, with labels. */
+  showRooms = false;
   hoverCell = -1;
   preview: Preview | null = null;
   private dpr = 1;
@@ -297,6 +304,7 @@ export class Renderer {
     }
 
     this.drawLight(tx0, ty0, tx1, ty1);
+    if (this.showRooms) this.drawRooms(tx0, ty0, tx1, ty1);
     this.drawAnimated(dt, tx0, ty0, tx1, ty1, timeSec);
     this.drawOrders(tx0, ty0, tx1, ty1, timeSec);
     this.drawSelectedBuilding();
@@ -654,6 +662,7 @@ export class Renderer {
       ctx.fillRect(px + 0.1, py - 1.1, 0.8 * (c.health / MAX_HEALTH), 0.1);
     }
     if (!sleeping) this.drawNeedIcon(c, px, py);
+    if (c.sick > 0 || c.onBreak) this.drawStatusIcon(c, px, py, time);
   }
 
   private drawZzz(px: number, py: number, t: number): void {
@@ -670,6 +679,68 @@ export class Renderer {
   }
 
   /** A small bubble over the head for the worst urgent need. */
+  /** Rooms tinted by type (Nice rooms brighter), the type name at the top of each. */
+  private drawRooms(tx0: number, ty0: number, tx1: number, ty1: number): void {
+    const ctx = this.ctx;
+    const g = this.world.grid;
+    for (const room of this.world.rooms.rooms.values()) {
+      if (room.x1 < tx0 || room.x0 > tx1 || room.y1 < ty0 || room.y0 > ty1) continue;
+      ctx.fillStyle = ROOM_COLOR[room.type];
+      ctx.globalAlpha = room.nice ? 0.32 : 0.2;
+      for (const c of room.cells) ctx.fillRect(c % g.w, (c / g.w) | 0, 1, 1);
+      ctx.globalAlpha = 1;
+      if (this.cam.zoom < 10) continue;
+      const label = ROOM_LABEL[room.type] + (room.nice ? ' ★' : '');
+      ctx.font = 'bold 0.42px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const cx = (room.x0 + room.x1 + 1) / 2;
+      const wText = ctx.measureText(label).width + 0.3;
+      ctx.fillStyle = 'rgba(10,10,14,0.75)';
+      ctx.fillRect(cx - wText / 2, room.y0 + 0.08, wText, 0.56);
+      ctx.fillStyle = ROOM_COLOR[room.type];
+      ctx.fillText(label, cx, room.y0 + 0.14);
+    }
+  }
+
+  /** Over the head: a green bug while sick, a storm cloud during a stress break. */
+  private drawStatusIcon(c: Colonist, px: number, py: number, time: number): void {
+    const ctx = this.ctx;
+    const cx = px + 0.5 + 0.42, cy = py - 1.75 + Math.sin(time * 3 + c.id) * 0.04;
+    ctx.fillStyle = 'rgba(15,12,14,0.85)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    if (c.onBreak) {
+      ctx.fillStyle = '#9aa3ab';
+      ctx.beginPath();
+      ctx.arc(cx - 0.06, cy - 0.02, 0.08, 0, Math.PI * 2);
+      ctx.arc(cx + 0.06, cy - 0.03, 0.09, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffd166';
+      ctx.lineWidth = 0.04;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy + 0.04);
+      ctx.lineTo(cx - 0.04, cy + 0.12);
+      ctx.lineTo(cx + 0.02, cy + 0.12);
+      ctx.lineTo(cx - 0.02, cy + 0.18);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = '#7cfc9a';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 0.07, 0.1, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#7cfc9a';
+      ctx.lineWidth = 0.03;
+      ctx.beginPath();
+      for (const s of [-1, 1]) {
+        ctx.moveTo(cx + s * 0.06, cy - 0.04); ctx.lineTo(cx + s * 0.14, cy - 0.08);
+        ctx.moveTo(cx + s * 0.06, cy + 0.04); ctx.lineTo(cx + s * 0.14, cy + 0.08);
+      }
+      ctx.stroke();
+    }
+  }
+
   private drawNeedIcon(c: Colonist, px: number, py: number): void {
     const n = c.needs;
     let kind: 'hunger' | 'sleep' | 'bladder' | 'hygiene' | null = null;

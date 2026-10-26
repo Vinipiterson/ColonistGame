@@ -136,7 +136,7 @@ describe('building priorities', () => {
     const w = room();
     w.resources.food = 0;
     const printer = w.buildings.add('printer', 4, 3, false);
-    w.buildings.add('battery', 7, 3, false).charge = 20_000;
+    w.buildings.add('battery', 7, 3, false).charge = BUILDS.battery.capacity!;
     const c = w.colonists[0];
     c.retryAt = Infinity; // keep it out of assignment; ask the job search directly
     w.issue({ type: 'configure', buildingId: printer.id, priority: 9 });

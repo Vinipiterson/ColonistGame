@@ -4,7 +4,7 @@
 // (where a colonist stands to use it) and per-slot reservations.
 
 import { BUILDS, DEFAULT_CROP, DEFAULT_PRIORITY, type BuildKind, type CropId } from './defs';
-import type { Grid } from './grid';
+import type { Grid, Rect } from './grid';
 import { canStand } from './nav';
 
 export interface Building {
@@ -48,6 +48,8 @@ export class BuildingStore {
   private byId = new Map<number, Building>();
   private nextId = 1;
   readonly byKind = new Map<BuildKind, Set<Building>>();
+  /** Footprints added / removed since the world last consumed them (room detection). */
+  changed: Rect[] = [];
   private g: Grid;
 
   constructor(g: Grid) {
@@ -86,6 +88,7 @@ export class BuildingStore {
     this.byId.set(b.id, b);
     this.ofKind(kind).add(b);
     for (const c of footprint(this.g, x, y, d.w, d.h)) this.g.setBld(c, b.id);
+    this.changed.push({ x0: x, y0: y, x1: x + d.w - 1, y1: y + d.h - 1 });
     return b;
   }
 
@@ -95,6 +98,7 @@ export class BuildingStore {
     this.byId.delete(b.id);
     this.ofKind(b.kind).delete(b);
     for (const c of footprint(this.g, b.x, b.y, b.w, b.h)) if (this.g.bld[c] === b.id) this.g.setBld(c, -1);
+    this.changed.push({ x0: b.x, y0: b.y, x1: b.x + b.w - 1, y1: b.y + b.h - 1 });
   }
 }
 
@@ -146,6 +150,7 @@ export function canPlaceBuilding(g: Grid, kind: BuildKind, x: number, y: number,
       if (!ignoreOrders && g.order[i] >= 0) return false;
     }
   }
+  if (d.mount === 'wall') return true;
   const supportY = d.mount === 'ceiling' ? y - 1 : y + d.h;
   for (let xx = x; xx < x + d.w; xx++) if (!g.solid(xx, supportY)) return false;
   return true;

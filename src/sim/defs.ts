@@ -29,8 +29,9 @@ export const Tile = {
 export type TileId = (typeof Tile)[keyof typeof Tile];
 
 export type CropId = 'mushroom' | 'tuber' | 'sunberry';
-export type ResourceId = 'matter' | 'coal' | 'radioactive' | CropId | 'food';
-export const RESOURCES: ResourceId[] = ['matter', 'coal', 'radioactive', 'mushroom', 'tuber', 'sunberry', 'food'];
+/** 'food' = printed rations; 'meal' = cooked meals (better: a mood boost). Both count as meals. */
+export type ResourceId = 'matter' | 'coal' | 'radioactive' | CropId | 'food' | 'meal';
+export const RESOURCES: ResourceId[] = ['matter', 'coal', 'radioactive', 'mushroom', 'tuber', 'sunberry', 'food', 'meal'];
 export const RESOURCE_LABEL: Record<ResourceId, string> = {
   matter: 'Matter',
   coal: 'Coal',
@@ -38,7 +39,8 @@ export const RESOURCE_LABEL: Record<ResourceId, string> = {
   mushroom: 'Mushrooms',
   tuber: 'Tubers',
   sunberry: 'Sunberries',
-  food: 'Meals',
+  food: 'Rations',
+  meal: 'Cooked meals',
 };
 
 export interface TileInfo {
@@ -73,7 +75,7 @@ export const SOLID: Uint8Array = (() => {
 
 export type BuildKind =
   | 'wall' | 'ladder' | 'stairs' // per-tile structures
-  | 'door' | 'bed' | 'toilet' | 'flushtoilet' | 'sink' | 'shower' | 'table' // multi-tile buildings
+  | 'door' | 'bed' | 'toilet' | 'flushtoilet' | 'sink' | 'shower' | 'table' | 'plant' | 'painting' // multi-tile buildings
   | 'printer' | 'planter' | 'stove' // food
   | 'crank' | 'coalgen' | 'battery' | 'reactor' | 'lamp' // power
   | 'research' | 'advresearch'; // science
@@ -97,8 +99,10 @@ export interface BuildDef {
   /** Use slots: how many colonists can use it at once (cells along the bottom row). */
   slots: number;
   hint: string;
-  /** 'ceiling': hangs under a solid tile instead of standing on a floor. */
-  mount?: 'floor' | 'ceiling';
+  /** 'ceiling': hangs under a solid tile; 'wall': hangs on the back wall (no support needed). */
+  mount?: 'floor' | 'ceiling' | 'wall';
+  /** Decor points: enough decor per room cell makes a room Nice. */
+  decor?: number;
   /** Watts drawn while active (lamp: while on; workstation: while operated). */
   powerUse?: number;
   /** Watts produced while running. */
@@ -162,6 +166,16 @@ export const BUILDS: Record<BuildKind, BuildDef> = {
     cost: { matter: 60 }, work: 4, solid: false, rotatable: false, slots: 2,
     hint: 'Two seats. Eating at a table is faster.',
   },
+  plant: {
+    kind: 'plant', name: 'Potted Plant', category: 'furniture', shape: 'building', w: 1, h: 1,
+    cost: { matter: 40 }, work: 3, solid: false, rotatable: true, slots: 0, decor: 10,
+    hint: 'Decor 10. Enough decor makes a room Nice (more happiness).',
+  },
+  painting: {
+    kind: 'painting', name: 'Painting', category: 'furniture', shape: 'building', w: 1, h: 1,
+    cost: { matter: 60, coal: 10 }, work: 6, solid: false, rotatable: false, slots: 0, decor: 25, mount: 'wall',
+    hint: 'Decor 25. Hangs on the back wall anywhere in a room.',
+  },
   printer: {
     kind: 'printer', name: 'Ration Printer', category: 'food', shape: 'building', w: 2, h: 2,
     cost: { matter: 150 }, work: 8, solid: false, rotatable: true, slots: 1, powerUse: 200, jobPriority: 6,
@@ -190,8 +204,8 @@ export const BUILDS: Record<BuildKind, BuildDef> = {
   },
   battery: {
     kind: 'battery', name: 'Battery', category: 'power', shape: 'building', w: 1, h: 2,
-    cost: { matter: 200 }, work: 5, solid: false, rotatable: false, slots: 0, capacity: 20_000,
-    hint: 'Stores 20 kJ of spare power (leaks slowly). Generators refill it.',
+    cost: { matter: 300, coal: 20 }, work: 5, solid: false, rotatable: false, slots: 0, capacity: 10_000,
+    hint: 'Stores 10 kJ of spare power, but leaks 0.1%/s: stored power is gone in ~15 min unused.',
   },
   reactor: {
     kind: 'reactor', name: 'Reactor', category: 'power', shape: 'building', w: 3, h: 3,
@@ -216,7 +230,7 @@ export const BUILDS: Record<BuildKind, BuildDef> = {
   },
 };
 export const BUILD_LIST: BuildKind[] = [
-  'wall', 'ladder', 'stairs', 'door', 'bed', 'toilet', 'flushtoilet', 'sink', 'shower', 'table',
+  'wall', 'ladder', 'stairs', 'door', 'bed', 'toilet', 'flushtoilet', 'sink', 'shower', 'table', 'plant', 'painting',
   'printer', 'planter', 'stove', 'crank', 'coalgen', 'battery', 'reactor', 'lamp', 'research', 'advresearch',
 ];
 export const DECONSTRUCT_WORK = 2;
@@ -263,7 +277,7 @@ export const RESEARCH: Record<ResearchId, ResearchDef> = {
   cooking: { name: 'Cooking', branch: 'Farming', tier: 2, cost: 800, needs: ['farming', 'advresearch'], builds: ['stove'], hint: 'The Cooking Station turns crops into meals.' },
   coal: { name: 'Coal Power', branch: 'Power', tier: 2, cost: 1000, needs: ['batteries', 'advresearch'], builds: ['coalgen'], hint: 'Coal generators: no more cranking.' },
   growlamps: { name: 'Grow Lamps', branch: 'Farming', tier: 2, cost: 1500, needs: ['farming', 'lighting', 'advresearch'], growLamp: true, hint: 'A 60 W lamp on planters: crops grow 50% faster.' },
-  furniture: { name: 'Advanced Furniture', branch: 'Comfort', tier: 2, cost: 1500, needs: ['showers', 'advresearch'], builds: ['flushtoilet'], hint: 'The Flush Toilet cleans itself.' },
+  furniture: { name: 'Advanced Furniture', branch: 'Comfort', tier: 2, cost: 1500, needs: ['showers', 'advresearch'], builds: ['flushtoilet', 'painting'], hint: 'The Flush Toilet cleans itself; paintings decorate rooms.' },
   sunberries: { name: 'Sunberries', branch: 'Farming', tier: 2, cost: 2000, needs: ['tubers', 'growlamps'], crops: ['sunberry'], hint: 'Fast and filling, but only grow under a grow lamp.' },
   nuclear: { name: 'Nuclear Power', branch: 'Power', tier: 2, cost: 4000, needs: ['coal'], builds: ['reactor'], hint: 'The reactor: 3000 W from radioactive matter.' },
 };
@@ -328,7 +342,7 @@ export const RAW_EAT_FACTOR = 1.5;
 /** Power is settled once a second over one colony-wide pool (no wires yet). */
 export const POWER_TICKS = 20;
 /** Batteries lose this fraction of their charge per second. */
-export const BATTERY_LEAK = 0.0002;
+export const BATTERY_LEAK = 0.001;
 /** Fuel generators start when batteries drop below GEN_START of capacity, stop above GEN_STOP. */
 export const GEN_START = 0.9;
 export const GEN_STOP = 0.99;
@@ -444,7 +458,69 @@ export function skillLevel(xp: number): number {
 }
 
 export const START_RESOURCES: Record<ResourceId, number> = {
-  matter: 300, coal: 0, radioactive: 0, mushroom: 0, tuber: 0, sunberry: 0, food: 6,
+  matter: 300, coal: 0, radioactive: 0, mushroom: 0, tuber: 0, sunberry: 0, food: 6, meal: 0,
 };
 
 export const WALK_SPEED = 3; // tiles per second for a cost-1 edge
+
+// ---------------------------------------------------------------- rooms
+
+export type RoomType = 'barracks' | 'messhall' | 'washroom' | 'farm' | 'lab' | 'room';
+export const ROOM_LABEL: Record<RoomType, string> = {
+  barracks: 'Barracks', messhall: 'Mess Hall', washroom: 'Washroom', farm: 'Farm', lab: 'Laboratory', room: 'Room',
+};
+/** A room is 12..120 open cells closed off by built walls, stair blocks, doors (or bedrock). */
+export const ROOM_MIN_CELLS = 12;
+export const ROOM_MAX_CELLS = 120;
+/** Nice room: decor >= this many points per cell. */
+export const NICE_DECOR_PER_CELL = 0.5;
+/** Room bonuses. */
+export const BARRACKS_SLEEP_BONUS = 1.25;
+export const FARM_GROWTH_BONUS = 1.2;
+export const LAB_RESEARCH_BONUS = 1.1;
+/** Planters a room needs to be a Farm. */
+export const FARM_MIN_PLANTERS = 2;
+
+// ---------------------------------------------------------------- happiness
+
+export type MoodletId =
+  | 'cooked' | 'table' | 'standing' | 'raw' | 'messhall' | 'barracks' | 'washroom' | 'soreback'
+  | 'cleaned' | 'smelly' | 'sick' | 'loved' | 'death' | 'vented';
+export interface MoodletDef {
+  label: string;
+  value: number;
+  /** Seconds; 0 = only while its condition holds (re-applied every check). */
+  duration: number;
+}
+export const MOODLETS: Record<MoodletId, MoodletDef> = {
+  cooked: { label: 'Ate a cooked meal', value: 6, duration: 0.5 * DAY_SECONDS },
+  table: { label: 'Ate at a table', value: 3, duration: 0.5 * DAY_SECONDS },
+  standing: { label: 'Ate standing up', value: -3, duration: 0.5 * DAY_SECONDS },
+  raw: { label: 'Ate raw crops', value: -8, duration: 0.5 * DAY_SECONDS },
+  messhall: { label: 'Ate in a mess hall', value: 4, duration: 0.5 * DAY_SECONDS },
+  barracks: { label: 'Slept in a barracks', value: 5, duration: 1 * DAY_SECONDS },
+  washroom: { label: 'Used a nice washroom', value: 3, duration: 0.5 * DAY_SECONDS },
+  soreback: { label: 'Sore back (slept on the floor)', value: -8, duration: 1 * DAY_SECONDS },
+  cleaned: { label: 'Cleaned an outhouse', value: -4, duration: 0.5 * DAY_SECONDS },
+  smelly: { label: 'Smelly', value: -10, duration: 0 },
+  sick: { label: 'Stomach bug', value: -10, duration: 0 },
+  loved: { label: 'Did work they love', value: 2, duration: 0.25 * DAY_SECONDS },
+  death: { label: 'A colonist died', value: -15, duration: 2 * DAY_SECONDS },
+  vented: { label: 'Let off steam', value: 15, duration: 0.5 * DAY_SECONDS },
+};
+/** Room moodlets are doubled in a Nice room. */
+export const NICE_ROOM_FACTOR = 2;
+export const BASE_MOOD = 50;
+/** Mood thresholds and work speed. */
+export const HAPPY_MOOD = 70;
+export const HAPPY_SPEED = 1.1;
+export const UNHAPPY_MOOD = 30;
+export const UNHAPPY_SPEED = 0.85;
+export const SORE_BACK_SPEED = 0.9;
+/** Below this mood a colonist may have a stress break: stops working for a game hour. */
+export const BREAK_MOOD = 10;
+export const BREAK_SECONDS = DAY_SECONDS / 24;
+/** Stomach bug: daily chance while hygiene is below DIRTY_THRESHOLD; lasts; work speed; heals 2x in a bed. */
+export const SICK_CHANCE_PER_DAY = 0.3;
+export const SICK_SECONDS = 1.5 * DAY_SECONDS;
+export const SICK_SPEED = 0.7;

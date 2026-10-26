@@ -179,10 +179,10 @@ check(st.res.coal < 600, `the coal generator burnt fuel (${st.res.coal.toFixed(1
 
 // Meals run out: the Cooking Station turns crops into meals
 const crops0 = st.res.tuber + st.res.sunberry;
-await page.evaluate(() => { window.__colony.world.resources.food = 0; });
+await page.evaluate(() => { const r = window.__colony.world.resources; r.food = 0; r.meal = 0; });
 await runFed(20 * 60);
 st = await state();
-check(st.res.food >= 1 && st.res.tuber + st.res.sunberry < crops0, `crops cooked into meals (meals ${st.res.food}, crops ${crops0} -> ${st.res.tuber + st.res.sunberry})`);
+check(st.res.meal >= 1 && st.res.tuber + st.res.sunberry < crops0, `crops cooked into meals (cooked ${st.res.meal}, crops ${crops0} -> ${st.res.tuber + st.res.sunberry})`);
 await page.screenshot({ path: `${shots}/m3-04-harvest.png` });
 
 // Inspector: switch a lamp off
@@ -223,6 +223,80 @@ check(skills.length === 6 && skills.some((s) => /like|love/.test(s)), `colonist 
 const xp = await page.evaluate(() => window.__colony.world.colonists.map((c) => Object.values(c.xp).reduce((a, b) => a + b, 0)));
 check(xp.every((v) => v > 150), `colonists gained XP while working (${xp.map((v) => Math.round(v))})`);
 await page.screenshot({ path: `${shots}/m4-02-skills.png` });
+const moodShown = await page.isVisible('.cp-mood');
+check(moodShown, 'colonist panel shows mood and moodlets');
+
+// M4b: right-click while dragging cancels the selection and leaves the tool
+await page.keyboard.press('KeyG');
+{
+  const a = await tileToScreen(s.x + 12, s.y - 2), b = await tileToScreen(s.x + 15, s.y);
+  const n0 = await page.evaluate(() => window.__colony.world.orders.count);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(b.x, b.y, { steps: 4 });
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.up({ button: 'right' });
+  await page.mouse.up();
+  await runFed(1);
+  const after = await page.evaluate(() => ({ mode: window.__colony.tools.mode, n: window.__colony.world.orders.count }));
+  check(after.mode === 'select' && after.n === n0, `right-click mid-drag cancels and leaves the tool (${after.mode}, orders ${n0} -> ${after.n})`);
+}
+
+// M4b: wall the chamber in (sides through the UI; the ceiling is out of reach and the floor is
+// under everyone, so those two rows are set directly) -> a room; the overlay shows it.
+await page.keyboard.press('KeyB');
+await pick('wall');
+await drag(s.x - 10, s.y - 3, s.x - 10, s.y);
+await drag(s.x + 10, s.y - 3, s.x + 10, s.y);
+await page.keyboard.press('Escape');
+await page.evaluate(([x0, x1, top, floor]) => {
+  const g = window.__colony.world.grid;
+  for (let x = x0; x <= x1; x++) {
+    g.setTile(x, top, 5, true); // Tile.Concrete, built
+    g.setTile(x, floor, 5, true);
+  }
+}, [s.x - 10, s.x + 10, s.y - 4, s.y + 1]);
+await page.evaluate(() => {
+  const w = window.__colony.world;
+  for (let i = 0; i < 20 * 300 && [...w.orders.all()].some((o) => o.kind === 'build'); i++) {
+    if (i % 200 === 0) for (const c of w.colonists) for (const k of Object.keys(c.needs)) c.needs[k] = 100;
+    w.step();
+  }
+});
+// rooms update once a second: give the last walls and the update up to 2 game minutes
+const room = await page.evaluate(([x, y]) => {
+  const w = window.__colony.world;
+  const at = () => w.rooms.at(w.grid.idx(x, y));
+  for (let i = 0; i < 20 * 120 && !at(); i++) {
+    if (i % 200 === 0) for (const c of w.colonists) for (const k of Object.keys(c.needs)) c.needs[k] = 100;
+    w.step();
+  }
+  const r = at();
+  return r ? { type: r.type, cells: r.cells.length } : null;
+}, [s.x, s.y]);
+if (!room) {
+  // what's open in the wall ring (natural tile / not built) and which wall orders are left
+  const diag = await page.evaluate(([x0, x1, top, floor]) => {
+    const w = window.__colony.world, g = w.grid;
+    const bad = [];
+    for (let y = top; y <= floor; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = g.idx(x, y);
+        const edge = y === top || y === floor || x === x0 || x === x1;
+        if (edge && !(g.tile[i] !== 0 && g.built[i])) bad.push([x, y, g.tile[i], g.built[i]]);
+      }
+    }
+    return { bad, builds: [...w.orders.all()].filter((o) => o.kind === 'build').map((o) => [o.x, o.y, o.digWork, o.progress]) };
+  }, [s.x - 10, s.x + 10, s.y - 4, s.y + 1]);
+  console.log('room diag', JSON.stringify(diag));
+}
+check(room?.type === 'lab' && room.cells === 76, `the walled chamber is a room: ${JSON.stringify(room)}`);
+await page.keyboard.press('KeyV');
+await page.evaluate(() => { window.__colony.hud.selectedId = -1; window.__colony.renderer.selectedId = -1; });
+await page.waitForTimeout(150);
+check(await page.evaluate(() => window.__colony.renderer.showRooms), 'V shows the rooms overlay');
+await page.screenshot({ path: `${shots}/m4b-01-rooms.png` });
+await page.keyboard.press('KeyV');
 
 await page.keyboard.press('KeyB');
 await page.setViewportSize({ width: 400, height: 800 });

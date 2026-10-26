@@ -5,7 +5,8 @@
 import {
   BUILDS, BUILD_LIST, BUILD_RESEARCH, CROPS, CROP_LIST, CROP_RESEARCH, DAY_SECONDS, EMERGENCY, GROW_LAMP_BONUS,
   GROW_LAMP_W, MAX_SKILL_LEVEL, NEEDS, NEED_DEFS, NEED_LABEL, OUTHOUSE_USES, RESEARCH, RESOURCE_LABEL, RESOURCES,
-  SKILLS, SKILL_LABEL, levelXp, type BuildCategory, type BuildKind, type CropId,
+  SKILLS, SKILL_LABEL, levelXp, type BuildCategory, type BuildKind, type CropId, HAPPY_MOOD, MOODLETS, ROOM_LABEL,
+  UNHAPPY_MOOD,
 } from '../sim/defs';
 import type { Building } from '../sim/buildings';
 import type { Colonist } from '../sim/colonist';
@@ -25,7 +26,7 @@ const TOOL_BUTTONS: { mode: ToolMode; label: string; key: string; hint: string }
 
 const RES_COLOR: Record<string, string> = {
   matter: '#a7764a', coal: '#4a4643', radioactive: '#7dff5a',
-  mushroom: '#c0503a', tuber: '#b5835a', sunberry: '#ff7a4d', food: '#f2a93b',
+  mushroom: '#c0503a', tuber: '#b5835a', sunberry: '#ff7a4d', food: '#f2a93b', meal: '#ff9a3d',
 };
 const CATEGORY_LABEL: Record<BuildCategory, string> = {
   structure: 'Structure', furniture: 'Furniture', food: 'Food', power: 'Power & light', science: 'Science',
@@ -52,6 +53,7 @@ export class Hud {
   private powerEl!: HTMLElement;
   private researchEl!: HTMLElement;
   private researchBtn!: HTMLButtonElement;
+  private roomsBtn!: HTMLButtonElement;
   private researchPanel!: ResearchPanel;
   /** Research done count the build bar lock state was last synced for. */
   private locksFor = -1;
@@ -136,7 +138,10 @@ export class Hud {
     const zoomIn = el('button', 'btn zoom', '+');
     zoomIn.title = 'Zoom in (=)';
     zoomIn.onclick = () => this.onZoom(1.25);
-    speed.append(zoomOut, zoomIn);
+    this.roomsBtn = el('button', 'btn zoom rooms-btn', 'Rooms');
+    this.roomsBtn.title = 'Show rooms (V)';
+    this.roomsBtn.onclick = () => this.tools.set({ rooms: !this.tools.rooms });
+    speed.append(zoomOut, zoomIn, this.roomsBtn);
     root.append(speed);
 
     // right: colonist panel
@@ -263,6 +268,7 @@ export class Hud {
     for (const [c, b] of this.tabBtns) b.classList.toggle('active', this.buildCat === c);
     for (const [c, r] of this.catRows) r.classList.toggle('hidden', this.buildCat !== c);
     this.researchBtn.classList.toggle('active', t.research);
+    this.roomsBtn.classList.toggle('active', t.rooms);
     this.researchPanel.el.classList.toggle('hidden', !t.research);
     for (const [p, b] of this.prioBtns) b.classList.toggle('active', t.priority === p);
     this.speedBtns.forEach((b, i) => b.classList.toggle('active', i === 0 ? t.paused : !t.paused && t.speed === i));
@@ -397,7 +403,8 @@ export class Hud {
     const job = w.jobOf(b.id);
     const worker = job && job.claimedBy >= 0 ? w.colonists.find((c) => c.id === job.claimedBy)?.name : undefined;
     const jobText = job ? (worker ? `${worker}` : 'Waiting for a colonist') : '—';
-    let out = '';
+    const room = w.rooms.ofBuilding(b);
+    let out = row('Room', room ? `${ROOM_LABEL[room.type]}${room.nice ? ' (Nice)' : ''} · decor ${room.decor}` : 'none (needs built walls)');
     switch (b.kind) {
       case 'planter': {
         const crop = CROPS[b.crop];
@@ -459,6 +466,18 @@ export class Hud {
     return out;
   }
 
+  /** Mood bar and the moodlets behind it (biggest first). */
+  private moodHtml(c: Colonist): string {
+    const v = Math.round(c.mood);
+    const cls = v < UNHAPPY_MOOD ? 'bad' : v < HAPPY_MOOD ? 'warn' : 'ok';
+    const effect = v >= HAPPY_MOOD ? 'happy: +10% work' : v < UNHAPPY_MOOD ? 'unhappy: −15% work' : 'content';
+    const list = [...c.moodlets.entries()].sort((a, b) => Math.abs(b[1].value) - Math.abs(a[1].value))
+      .map(([id, m]) => `<div class="cp-moodlet ${m.value < 0 ? 'neg' : 'pos'}"><span>${MOODLETS[id].label}</span><em>${m.value > 0 ? '+' : ''}${m.value}</em></div>`)
+      .join('');
+    return `<div class="cp-mood"><div class="cp-need ${cls}"><span>Mood</span><i><b style="width:${v}%"></b></i><em>${v}</em></div>` +
+      `<div class="cp-mood-note">${c.onBreak ? 'Stress break!' : effect}${c.sick > 0 ? ' · stomach bug (−30% work)' : ''}</div>${list}</div>`;
+  }
+
   /** Skill levels with XP to the next level; ★ like, ♥ love, ✕ hate (never does that work). */
   private skillsHtml(c: Colonist): string {
     const mark = { like: '★', love: '♥', hate: '✕' };
@@ -494,7 +513,7 @@ export class Hud {
           const d = NEED_DEFS[n];
           const cls = v < d.urgent ? 'bad' : v < d.want ? 'warn' : 'ok';
           return `<div class="cp-need ${cls}"><span>${NEED_LABEL[n]}</span><i><b style="width:${v}%"></b></i><em>${v}</em></div>`;
-        }).join('') + `</div>` + this.skillsHtml(c)
+        }).join('') + `</div>` + this.moodHtml(c) + this.skillsHtml(c)
         : '');
     if (this.panel.innerHTML !== html) this.panel.innerHTML = html;
   }

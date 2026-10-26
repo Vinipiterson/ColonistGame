@@ -281,6 +281,54 @@ export function drawBuilding(
       }
       break;
     }
+    case 'plant': {
+      // clay pot with a leafy plant
+      ctx.fillStyle = col('#a0522d');
+      ctx.beginPath();
+      ctx.moveTo(x + 0.28, y + 0.62);
+      ctx.lineTo(x + 0.72, y + 0.62);
+      ctx.lineTo(x + 0.64, y + 1);
+      ctx.lineTo(x + 0.36, y + 1);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = col('#c0703f');
+      ctx.fillRect(x + 0.25, y + 0.58, 0.5, 0.08);
+      ctx.fillStyle = col(P.leafDark);
+      for (let k = 0; k < 5; k++) {
+        const a = -Math.PI / 2 + (k - 2) * 0.45;
+        ctx.beginPath();
+        ctx.ellipse(x + 0.5 + Math.cos(a) * 0.18, y + 0.42 + Math.sin(a) * 0.16, 0.13, 0.06, a, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = col(P.leaf);
+      ctx.beginPath();
+      ctx.ellipse(x + 0.5, y + 0.3, 0.06, 0.14, 0, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case 'painting': {
+      // framed landscape on the back wall
+      ctx.fillStyle = col(P.woodDark);
+      ctx.fillRect(x + 0.08, y + 0.15, 0.84, 0.66);
+      ctx.fillStyle = col('#6fa8dc');
+      ctx.fillRect(x + 0.15, y + 0.22, 0.7, 0.52);
+      if (!tint) {
+        ctx.fillStyle = '#5fae4a';
+        ctx.beginPath();
+        ctx.moveTo(x + 0.15, y + 0.74);
+        ctx.lineTo(x + 0.4, y + 0.45);
+        ctx.lineTo(x + 0.6, y + 0.62);
+        ctx.lineTo(x + 0.85, y + 0.4);
+        ctx.lineTo(x + 0.85, y + 0.74);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#ffd166';
+        ctx.beginPath();
+        ctx.arc(x + 0.68, y + 0.32, 0.06, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
     case 'planter': {
       // wooden box with soil in the bottom cell; the plant is drawn on top (drawPlant)
       ctx.fillStyle = col(P.woodDark);
