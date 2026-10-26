@@ -10,10 +10,13 @@ export const Move = {
   Step: 1, // diagonal up/down by one tile
   Climb: 2, // vertical along stairs
   Fall: 3, // one-way drop of 2..SAFE_FALL tiles (planned), or any height (accidental)
+  Jump: 4, // across a 1-wide gap to the same height (two tiles sideways)
+  Scale: 5, // up a 2-high ledge (up two, over one) and the matching climb down
 } as const;
 export type MoveType = (typeof Move)[keyof typeof Move];
 
-export const MOVE_COST: Record<number, number> = { 0: 1, 1: 1.4, 2: 1.6, 3: 1 };
+/** Jump ~0.7 s (like two walks); scaling a 2-high ledge ~1.3 s, slower than a ladder. */
+export const MOVE_COST: Record<number, number> = { 0: 1, 1: 1.4, 2: 1.6, 3: 1, 4: 2.1, 5: 4 };
 export function fallCost(h: number): number {
   return 1 + 0.3 * h;
 }
@@ -38,7 +41,7 @@ export function landingY(g: Grid, x: number, y0: number): number {
   return -1;
 }
 
-export const MAX_NEIGHBORS = 12;
+export const MAX_NEIGHBORS = 16;
 
 /** Is (x,y) a stair block that rises in direction dx (+1 right, -1 left)? */
 export function stairRises(g: Grid, x: number, y: number, dx: number): boolean {
@@ -84,7 +87,22 @@ export function neighbors(
         if (ly > 0 && ly - y <= SAFE_FALL) {
           outCell[n] = ly * w + nx; outType[n] = Move.Fall; outCost[n] = fallCost(ly - y); n++;
         }
+        // Jump the 1-wide gap to the same height: the body passes through (nx,y),(nx,y-1) and
+        // needs one more free cell above for the arc. Symmetric, so it is a two-way move.
+        if (canStand(g, x + 2 * dx, y) && g.free(nx, y - 2) && g.free(x, y - 2) && g.free(x + 2 * dx, y - 2)) {
+          outCell[n] = y * w + x + 2 * dx; outType[n] = Move.Jump; outCost[n] = MOVE_COST[Move.Jump]; n++;
+        }
+        // Climb down a 2-high ledge (the exact mirror of scaling it, below): sideways, then down two.
+        if (canStand(g, nx, y + 2) && !canStand(g, x, y + 1)) {
+          outCell[n] = (y + 2) * w + nx; outType[n] = Move.Scale; outCost[n] = MOVE_COST[Move.Scale]; n++;
+        }
       }
+    }
+    // Scale a 2-high ledge: rise two in our own column (head needs (x,y-3)), then over onto it.
+    // Conditions mirror the climb down exactly (regions treat non-fall moves as two-way).
+    if (canStand(g, nx, y - 2) && !canStand(g, nx, y - 1) && g.free(x, y - 2) && g.free(x, y - 3) &&
+        !canStand(g, x, y - 2) && !canStand(g, x, y - 1)) {
+      outCell[n] = (y - 2) * w + nx; outType[n] = Move.Scale; outCost[n] = MOVE_COST[Move.Scale]; n++;
     }
   }
   // Climb up

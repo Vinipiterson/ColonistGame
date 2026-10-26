@@ -25,7 +25,7 @@ describe('movement rules', () => {
     expect(Array.from(p2!.types)).toContain(Move.Step);
   });
 
-  it('can step up 1 tile but not 2', () => {
+  it('can step up 1 tile, scale 2, but not climb 3', () => {
     const w = worldFromAscii([
       'BBBBBBB',
       'B.....B',
@@ -46,7 +46,20 @@ describe('movement rules', () => {
       'B@.#.B',
       'BBBBBB',
     ]);
-    expect(w2.paths.findNow(cell(w2, 1, 4), [cell(w2, 3, 2)])).toBeNull();
+    // a 2-high wall: scaled (slowly) since M4b
+    const p2 = w2.paths.findNow(cell(w2, 1, 4), [cell(w2, 3, 2)]);
+    expect(p2).not.toBeNull();
+    expect(Array.from(p2!.types)).toContain(Move.Scale);
+    const w3 = worldFromAscii([
+      'BBBBBB',
+      'B....B',
+      'B....B',
+      'B..#.B',
+      'B..#.B',
+      'B@.#.B',
+      'BBBBBB',
+    ]);
+    expect(w3.paths.findNow(cell(w3, 1, 5), [cell(w3, 3, 2)])).toBeNull();
   });
 
   it('climbs stairs in both directions', () => {

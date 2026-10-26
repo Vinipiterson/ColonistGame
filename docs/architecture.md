@@ -9,6 +9,7 @@ TypeScript (strict) + Canvas 2D, Vite (single-file build), Vitest (headless sim 
 - Radioactive matter: fuel for a reactor (high power). No hazard for now.
 - Plants: several crops, data-driven (e.g. a slow crop on regular matter, a faster crop needing coal + power).
 - Fall damage: scaled. ≤3 tiles safe; damage = 4·(h−3)², so 8 tiles is lethal. Health regens while sleeping. Pathing never plans falls >3.
+- Jumps and ledges (after M4b): colonists jump a 1-wide gap at the same height (~0.7 s, needs headroom for the arc) and scale a 2-high ledge up or down (~1.3 s, slower than a ladder). Both are two-way, so a 2-deep pit is no longer a trap; 3+ still needs a ladder or stairs.
 - Losing footing: when the ground vanishes, a colonist hangs on up to 1 s and pulls itself onto a side tile (level, one up, one down), ONI-style; otherwise it falls.
 - Build on natural tiles: wall/ladder/stairs orders may go on dirt/coal/radioactive; the job digs the tile out first (normal yield), then builds. A build replaces a pending dig order on the cell. Builds never target player-built tiles (use Deconstruct).
 - Manual generator: costs time + faster sleep and hunger drain.
@@ -76,6 +77,7 @@ TypeScript (strict) + Canvas 2D, Vite (single-file build), Vitest (headless sim 
 - Meals: printer → Rations (`food`), Cooking Station → Cooked meals (`meal`); both count toward the stock target; colonists eat cooked, then rations, then raw.
 - Batteries rebalanced: 10 kJ, 300 matter + 20 coal, leak 0.1%/s.
 - Right-click during a drag cancels the selection and leaves the tool (a second button pressed mid-drag arrives as a pointermove, so it's detected from `buttons`).
+- Canvas text (priority badges, room labels, Z icons) is drawn in screen pixels through the current transform: sub-1px "tile-unit" fonts are dropped by some browsers.
 
 ## Skills (M4)
 | Skill | Jobs |
@@ -124,7 +126,7 @@ Thresholds per need: want (handle after the current job), urgent (drop the job, 
 - Sim is pure TS, deterministic (seeded RNG), fixed 20 Hz tick; speeds 1×/2×/3× run more ticks per frame. Commands in, events out. The UI never mutates sim state directly.
 - Grid: typed-array layers (tile, built flag, ladder, stair facing, building id, order id).
 - Buildings: BuildingStore with footprints (x,y top-left, w×h, flip), not solid, use cells on the bottom row. Placement: footprint empty + solid floor under the bottom row. Drag places copies side by side.
-- Nav: stand cell = 2 free cells + support. Edges generated on demand: walk, step ±1 (cheaper along a stair block), climb ladder, fall (one-way; planned only if ≤3).
+- Nav: stand cell = 2 free cells + support. Edges generated on demand: walk, step ±1 (cheaper along a stair block), climb ladder, jump a 1-wide gap, scale a 2-high ledge (up and down), fall (one-way; planned only if ≤3). Regions treat every non-fall move as two-way, so each move's conditions are written as an exact mirror (fuzz-tested in tests/moves.test.ts).
 - Regions: 16×16 chunks → connected components over two-way moves; edges store target cells (resolved at query time). Reachability = cached BFS per source region per version. Incremental chunk rebuilds.
 - PathService: multi-goal A*, binary heap, generation stamps, node budget per tick, region pre-check.
 - Revalidation: moving colonists whose remaining path crosses a dirty area re-check edges; broken → re-path; unreachable → next-best job.

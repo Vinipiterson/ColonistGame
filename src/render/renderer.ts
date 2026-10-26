@@ -545,10 +545,27 @@ export class Renderer {
     ctx.arc(x + w - 0.2, y + 0.2, 0.17, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 0.26px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(em ? '!' : String(priority), x + w - 0.2, y + 0.21);
+    this.text(em ? '!' : String(priority), x + w - 0.2, y + 0.21, 0.26, 'center', 'middle');
+  }
+
+  /**
+   * Text at tile coordinates (through the current transform), drawn in screen pixels. Canvas
+   * fonts below 1px (0.3 "tiles") are dropped by some browsers, so the font is sized after the
+   * transform. Uses the current fillStyle / globalAlpha. Returns the width in tile units.
+   */
+  private text(s: string, x: number, y: number, size: number, align: CanvasTextAlign, baseline: CanvasTextBaseline, draw = true): number {
+    const ctx = this.ctx;
+    const m = ctx.getTransform();
+    const scale = Math.hypot(m.a, m.b);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.font = `bold ${Math.max(1, size * scale)}px system-ui, sans-serif`;
+    ctx.textAlign = align;
+    ctx.textBaseline = baseline;
+    if (draw) ctx.fillText(s, m.a * x + m.c * y + m.e, m.b * x + m.d * y + m.f);
+    const width = ctx.measureText(s).width / scale;
+    ctx.restore();
+    return width;
   }
 
   private drawPreview(): void {
@@ -668,12 +685,10 @@ export class Renderer {
   private drawZzz(px: number, py: number, t: number): void {
     const ctx = this.ctx;
     ctx.fillStyle = 'rgba(180,210,255,0.85)';
-    ctx.font = 'bold 0.32px system-ui, sans-serif';
-    ctx.textAlign = 'center';
     for (let k = 0; k < 2; k++) {
       const ph = (t * 0.6 + k * 0.5) % 1;
       ctx.globalAlpha = 1 - ph;
-      ctx.fillText('z', px + 0.7 + ph * 0.3 + k * 0.15, py - 0.1 - ph * 0.7);
+      this.text('z', px + 0.7 + ph * 0.3 + k * 0.15, py - 0.1 - ph * 0.7, 0.32, 'center', 'alphabetic');
     }
     ctx.globalAlpha = 1;
   }
@@ -691,15 +706,12 @@ export class Renderer {
       ctx.globalAlpha = 1;
       if (this.cam.zoom < 10) continue;
       const label = ROOM_LABEL[room.type] + (room.nice ? ' ★' : '');
-      ctx.font = 'bold 0.42px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
       const cx = (room.x0 + room.x1 + 1) / 2;
-      const wText = ctx.measureText(label).width + 0.3;
+      const wText = this.text(label, cx, room.y0 + 0.14, 0.42, 'center', 'top', false) + 0.3;
       ctx.fillStyle = 'rgba(10,10,14,0.75)';
       ctx.fillRect(cx - wText / 2, room.y0 + 0.08, wText, 0.56);
       ctx.fillStyle = ROOM_COLOR[room.type];
-      ctx.fillText(label, cx, room.y0 + 0.14);
+      this.text(label, cx, room.y0 + 0.14, 0.42, 'center', 'top');
     }
   }
 
@@ -765,10 +777,7 @@ export class Renderer {
       ctx.stroke();
       ctx.fillRect(cx - 0.015, cy - 0.15, 0.03, 0.1);
     } else if (kind === 'sleep') {
-      ctx.font = 'bold 0.3px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('Z', cx, cy + 0.01);
+      this.text('Z', cx, cy + 0.01, 0.3, 'center', 'middle');
     } else if (kind === 'bladder') {
       ctx.beginPath();
       ctx.moveTo(cx, cy - 0.15);

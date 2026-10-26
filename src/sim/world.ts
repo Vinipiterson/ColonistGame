@@ -1683,6 +1683,17 @@ export class World {
         c.px = fx + (tx - fx) * Math.min(1, side ? t / side : 1);
         const v = side ? Math.max(0, (t - side) / (1 - side)) : t;
         c.py = fy + (ty - fy) * v * v;
+      } else if (type === Move.Jump) {
+        // an arc over the gap, peaking 0.6 tiles up
+        c.px = fx + (tx - fx) * t;
+        c.py = fy - 2.4 * t * (1 - t);
+      } else if (type === Move.Scale) {
+        // climbing up: rise in our own column, then over the edge; climbing down: over, then down
+        const up = ty < fy;
+        const r = up ? Math.min(1, t / 0.75) : Math.max(0, (t - 0.25) / 0.75);
+        const s = up ? Math.max(0, (t - 0.75) / 0.25) : Math.min(1, t / 0.25);
+        c.px = fx + (tx - fx) * s;
+        c.py = fy + (ty - fy) * r;
       } else {
         c.px = fx + (tx - fx) * t;
         c.py = fy + (ty - fy) * t;

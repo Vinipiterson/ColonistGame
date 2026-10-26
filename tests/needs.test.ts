@@ -276,10 +276,11 @@ describe('not getting trapped', () => {
   it('a stair block that would cut a colonist off from the colony is held back', () => {
     // colonist in a low dead end (x=1..3); the only way out is the step up onto the block at (4,4).
     // A stair block at (3,3) would take the headroom over (3,4) and seal the dead end.
+    // (The low ceiling at (1..2,2) stops the colonist scaling out onto the stair block instead.)
     const w = worldFromAscii([
       'BBBBBBBBBB',
       'B........B',
-      'B........B',
+      'BBB......B',
       'B........B',
       'B@..#....B',
       'BBBBBBBBBB',

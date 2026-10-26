@@ -43,6 +43,6 @@ Side-view 2D tile colony sim (TypeScript + Canvas 2D). Milestone 4b (rooms, happ
       worldgen.ts   procedural world
     src/render/   canvas renderer (chunk cache, overlays, colonists) + art.ts (building art)
     src/ui/       input, HUD, research panel
-    tests/        vitest (nav, regions, sim scenarios, building, needs, farm/power, research, skills, rooms-mood, benchmark)
+    tests/        vitest (nav, regions, sim scenarios, building, needs, farm/power, research, skills, rooms-mood, moves, benchmark)
     e2e/          Playwright scripts
     docs/architecture.md  design decisions, architecture, milestones
